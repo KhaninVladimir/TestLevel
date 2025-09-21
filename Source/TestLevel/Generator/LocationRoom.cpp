@@ -7,6 +7,7 @@
 #include "RoadSegment.h"
 #include "Algo/MaxElement.h"
 #include "Components/InstancedStaticMeshComponent.h"
+#include "Components/PrimitiveComponent.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Engine/World.h"
 
@@ -120,12 +121,16 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 	GenSettings = Settings;
 	Rng = RndStream;
 
+	// Align room transform with the provided marker.
+	SetActorTransform(EntranceMarker->GetActorTransform());
+
 	// Room transform (rotation-aware math)
 	const FQuat RoomQ = GetActorTransform().GetRotation();
 
 	// --- 0) Inputs ---
-	const FVector EntranceWorld = GetActorLocation();
-	const FVector MarkerFwdWorld = GetActorForwardVector();
+	EntranceLocation = EntranceMarker->GetActorLocation();
+	const FVector EntranceWorld = EntranceLocation;
+	const FVector MarkerFwdWorld = EntranceMarker->GetActorForwardVector();
 	//const FVector MarkerFwdLocal = RoomQ.UnrotateVector(MarkerFwdWorld); // marker forward in room-local	
 
 	// If marker's arrow points INSIDE the room, flip to get OUTWARD normal direction.
@@ -146,7 +151,7 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 	FDoorwaySpec Entrance;
 	Entrance.Side = EntranceSide;
 	Entrance.HalfWidth = GenSettings->DoorwayHalfWidth;
-	Entrance.WorldTransform = GetActorTransform();
+	Entrance.WorldTransform = EntranceMarker->GetActorTransform();
 
         const FVector OutWS = RoomQ.RotateVector(LocalOut(Entrance.Side)).GetSafeNormal();
         const FVector AlongWS = SideDirectionWorld(Entrance.Side).GetSafeNormal();
@@ -263,8 +268,9 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 	// --- 8) POIs / Monsters ---
 	POIs.Empty();
 	POIs.Reserve(GenSettings->POICountRange.Max); // верхняя граница — разумная эвристика
-	SpawnPOIs(EntranceWorld, POIs);
+	SpawnPOIs(EntranceLocation, POIs);
 
+	SpawnEnvironment();
 	SpawnRoads();
 
 	TArray<AActor*> Monsters;
@@ -462,6 +468,120 @@ void ALocationRoom::SpawnPOIs(const FVector& EntranceWorld, TArray<AActor*>& Out
 	}
 }
 
+void ALocationRoom::SpawnEnvironment()
+{
+	if (!GenSettings)
+	{
+		return;
+	}
+
+	for (UInstancedStaticMeshComponent* Comp : EnvironmentComponents)
+	{
+		if (Comp)
+		{
+			Comp->DestroyComponent();
+		}
+	}
+	EnvironmentComponents.Reset();
+	EnvironmentObstacles.Reset();
+
+	const TArray<FEnvironmentSpawnEntry>& Entries = GenSettings->EnvironmentMeshes;
+	if (Entries.Num() == 0)
+	{
+		return;
+	}
+
+	const FVector2f H = GetHalfSize();
+
+	TArray<FVector> CorridorTargets;
+	CorridorTargets.Reserve(1 + Exits.Num() + POIs.Num());
+	FVector EntranceRef = EntranceLocation;
+	if (EntranceRef.IsNearlyZero())
+	{
+		EntranceRef = GetActorLocation();
+	}
+	CorridorTargets.Add(EntranceRef);
+	for (const FDoorwaySpec& Exit : Exits)
+	{
+		CorridorTargets.AddUnique(Exit.WorldTransform.GetLocation());
+	}
+	for (AActor* POI : POIs)
+	{
+		if (POI)
+		{
+			CorridorTargets.AddUnique(POI->GetActorLocation());
+		}
+	}
+
+	for (const FEnvironmentSpawnEntry& Entry : Entries)
+	{
+		if (!Entry.Mesh)
+		{
+			continue;
+		}
+
+		const int32 DesiredCount = Entry.ResolveCount(Rng);
+		if (DesiredCount <= 0)
+		{
+			continue;
+		}
+
+		UInstancedStaticMeshComponent* Comp = NewObject<UInstancedStaticMeshComponent>(this);
+		if (!Comp)
+		{
+			continue;
+		}
+
+		Comp->SetMobility(EComponentMobility::Static);
+		Comp->SetFlags(RF_Transactional);
+		Comp->SetupAttachment(RootComponent);
+		Comp->RegisterComponent();
+		Comp->SetStaticMesh(Entry.Mesh);
+		Comp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		EnvironmentComponents.Add(Comp);
+
+		const float MarginX = FMath::Max(Entry.Radius, GenSettings->RoadMargin.X);
+		const float MarginY = FMath::Max(Entry.Radius, GenSettings->RoadMargin.Y);
+		if (MarginX >= H.X || MarginY >= H.Y)
+		{
+			continue;
+		}
+
+		int32 Placed = 0;
+		int32 Attempts = 0;
+		const int32 MaxAttempts = 48 * FMath::Max(1, DesiredCount);
+
+		while (Placed < DesiredCount && Attempts < MaxAttempts)
+		{
+			++Attempts;
+
+			const FVector CandidateLocal(
+				Rng.FRandRange(-H.X + MarginX, H.X - MarginX),
+				Rng.FRandRange(-H.Y + MarginY, H.Y - MarginY),
+				0.f);
+			const FVector Candidate = RoomLocalToWorld(CandidateLocal);
+
+			if (!CanPlaceEnvironmentAt(Candidate, Entry, CorridorTargets))
+			{
+				continue;
+			}
+
+			FTransform InstanceXf;
+			InstanceXf.SetLocation(Candidate);
+			InstanceXf.SetRotation(FQuat(FVector::UpVector, FMath::DegreesToRadians(Rng.FRandRange(0.f, 360.f))));
+			InstanceXf.SetScale3D(FVector(1.f));
+			Comp->AddInstance(InstanceXf);
+
+			FEnvironmentObstacle Obstacle;
+			Obstacle.Location = Candidate;
+			Obstacle.Radius = Entry.Radius;
+			EnvironmentObstacles.Add(Obstacle);
+
+			++Placed;
+		}
+	}
+}
+
 void ALocationRoom::SpawnMonsters(TArray<AActor*>& OutMonsters)
 {
 	UWorld* W = GetWorld();
@@ -625,7 +745,93 @@ void ALocationRoom::SpawnRoads()
                 if (ARoadSegment* RoadNet = W->SpawnActor<ARoadSegment>(ARoadSegment::StaticClass(), GetActorTransform()))
                 {
                         RoadNetwork = RoadNet;
-                        RoadNet->BuildNetwork(RoadPoint, Exits.Num(), GetHalfSize(), GenSettings, Rng);
+                        RoadNet->BuildNetwork(RoadPoint, Exits.Num(), GetHalfSize(), GenSettings, Rng, EnvironmentObstacles);
                 }
         }
+}
+
+bool ALocationRoom::CanPlaceEnvironmentAt(const FVector& Candidate, const FEnvironmentSpawnEntry& Entry, const TArray<FVector>& CorridorTargets) const
+{
+	const FVector2f H = GetHalfSize();
+	const FVector Local = WorldToRoomLocal(Candidate);
+	const float Radius = FMath::Max(0.f, Entry.Radius);
+
+	if (FMath::Abs(Local.X) > H.X - Radius)
+	{
+		return false;
+	}
+	if (FMath::Abs(Local.Y) > H.Y - Radius)
+	{
+		return false;
+	}
+
+	const FVector2D Candidate2D(Candidate.X, Candidate.Y);
+
+	for (const FEnvironmentObstacle& Ob : EnvironmentObstacles)
+	{
+		const FVector2D Ob2(Ob.Location.X, Ob.Location.Y);
+		const float Dist = FVector2D::Distance(Candidate2D, Ob2);
+		if (Dist < (Radius + Ob.Radius + Entry.MinSpacing))
+		{
+			return false;
+		}
+	}
+
+	const float Clearance = FMath::Max(0.f, Entry.ClearanceFromKeyPoints);
+	if (Clearance > 0.f)
+	{
+		for (const FVector& Key : CorridorTargets)
+		{
+			const FVector2D Key2(Key.X, Key.Y);
+			const float Dist = FVector2D::Distance(Candidate2D, Key2);
+			if (Dist < Radius + Clearance)
+			{
+				return false;
+			}
+		}
+	}
+
+	return KeepsCorridorsOpen(Candidate2D, Radius, Entry, CorridorTargets);
+}
+
+bool ALocationRoom::KeepsCorridorsOpen(const FVector2D& Candidate, float Radius, const FEnvironmentSpawnEntry& Entry, const TArray<FVector>& CorridorTargets) const
+{
+	const float CorridorHalf = FMath::Max(0.f, Entry.CorridorHalfWidth);
+	if (CorridorHalf <= 0.f || CorridorTargets.Num() <= 1)
+	{
+		return true;
+	}
+
+	const FVector2D Entrance2D(CorridorTargets[0].X, CorridorTargets[0].Y);
+
+	for (int32 idx = 1; idx < CorridorTargets.Num(); ++idx)
+	{
+		const FVector2D Target2D(CorridorTargets[idx].X, CorridorTargets[idx].Y);
+		if (FVector2D::Distance(Entrance2D, Target2D) <= KINDA_SMALL_NUMBER)
+		{
+			continue;
+		}
+
+		const float DistToSegment = DistancePointToSegment2D(Candidate, Entrance2D, Target2D);
+		if (DistToSegment < Radius + CorridorHalf)
+		{
+			return false;
+		}
+	}
+
+	return true;
+}
+
+float ALocationRoom::DistancePointToSegment2D(const FVector2D& P, const FVector2D& A, const FVector2D& B)
+{
+	const FVector2D AB = B - A;
+	const float LenSq = AB.SizeSquared();
+	if (LenSq <= KINDA_SMALL_NUMBER)
+	{
+		return FVector2D::Distance(P, A);
+	}
+
+	const float T = FMath::Clamp(FVector2D::DotProduct(P - A, AB) / LenSq, 0.f, 1.f);
+	const FVector2D Closest = A + AB * T;
+	return FVector2D::Distance(P, Closest);
 }

@@ -44,6 +44,9 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Meshes")
 	UStaticMesh* RoadSplineMesh = nullptr;
 
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Environment")
+	TArray<FEnvironmentSpawnEntry> EnvironmentMeshes;
+
 	// --- Roads ---
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
 	int32 RoadMidpointCount = 2;
