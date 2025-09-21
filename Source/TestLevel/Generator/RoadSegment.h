@@ -27,9 +27,9 @@ protected:
 	UPROPERTY(VisibleAnywhere)
 	USceneComponent* Root;
 
-	void BuildOnePath(const TArray<FVector>& PathPointsWS);
+        void BuildOnePath(const TArray<FVector>& PathPointsWS);
 
-	int32 FindNearestPointOnPath(const FVector& Point, const TArray<FVector>& Path);
+        bool FindNearestPointOnPath(const FVector& Point, const TArray<FVector>& Path, FVector& OutPoint, float& OutDistSq) const;
 
 	// Utility used by BuildNetwork
 	void ComputeMST_Prim(const TArray<FVector2f>& PtsLocal, TArray<FIntPoint>& OutEdges);
