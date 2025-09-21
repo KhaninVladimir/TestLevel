@@ -8,6 +8,7 @@
 
 ARoadSegment::ARoadSegment()
 {
+
         PrimaryActorTick.bCanEverTick = false;
 
         Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
@@ -17,10 +18,12 @@ ARoadSegment::ARoadSegment()
         Spline->SetupAttachment(RootComponent);
         Spline->SetMobility(EComponentMobility::Movable);
         Spline->bDrawDebug = false;
+
 }
 
 void ARoadSegment::ResetSplineMeshes()
 {
+
         for (USplineMeshComponent* MeshComp : SplineMeshes)
         {
                 if (MeshComp)
@@ -29,10 +32,12 @@ void ARoadSegment::ResetSplineMeshes()
                 }
         }
         SplineMeshes.Reset();
+
 }
 
 void ARoadSegment::BuildFromPoints(const TArray<FVector>& Points, UStaticMesh* Mesh, const FVector2f& Scale)
 {
+
         if (Points.Num() < 2 || !Mesh)
         {
                 return;
@@ -78,4 +83,5 @@ void ARoadSegment::BuildFromPoints(const TArray<FVector>& Points, UStaticMesh* M
                 MeshComp->SetStartScale(MeshScale);
                 MeshComp->SetEndScale(MeshScale);
         }
+
 }

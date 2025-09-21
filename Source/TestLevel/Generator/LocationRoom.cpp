@@ -7,7 +7,6 @@
 #include "Generator/WorldGenSettings.h"
 #include "Generator/WorldStartMarker.h"
 
-#include "Algo/Shuffle.h"
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Engine/StaticMesh.h"
 #include "Engine/World.h"
@@ -61,8 +60,9 @@ ALocationRoom::ALocationRoom()
     Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
     SetRootComponent(Root);
 
-    WallISM = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("WallISM"));
-    WallISM->SetupAttachment(RootComponent);
+	WallISM = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("WallISM"));
+	WallISM->SetupAttachment(RootComponent);
+	WallISM->SetMobility(EComponentMobility::Static);
 }
 
 void ALocationRoom::Generate(const UWorldGenSettings* Settings, FRandomStream InRndStream, AWorldStartMarker* StartMarker)

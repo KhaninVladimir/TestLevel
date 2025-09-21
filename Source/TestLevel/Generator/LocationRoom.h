@@ -23,26 +23,28 @@ class UInstancedStaticMeshComponent;
 UCLASS(Blueprintable)
 class TESTLEVEL_API ALocationRoom : public AActor
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
 public:
-        ALocationRoom();
+       ALocationRoom();
+
 
         // Entry point to generate everything.
         UFUNCTION(BlueprintCallable, Category = "WorldGen")
         void Generate(const UWorldGenSettings* Settings, FRandomStream RndStream, AWorldStartMarker* StartMarker);
+
 
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	USceneComponent* Root;
 
 	// Visual walls as segments; could be HISM for efficiency if desired.
-	UPROPERTY(VisibleAnywhere) 
+	UPROPERTY(VisibleAnywhere)
 	UInstancedStaticMeshComponent* WallISM;
 
 	// Cached for convenience
-	UPROPERTY() 
+	UPROPERTY()
 	const UWorldGenSettings* GenSettings = nullptr;
-	UPROPERTY() 
+	UPROPERTY()
 	FRandomStream RndStream;
 
 };
