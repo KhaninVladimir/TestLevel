@@ -36,26 +36,34 @@ protected:
 	void MaybeAddShortcuts(const TArray<FVector2f>& PtsLocal, const FVector2f& H, TArray<FIntPoint>& InOutEdges);
 
 	// Generate naturally-curved path points for the edge (A,B)
-	void MakeCurvedPath(const FVector& A, const FVector& B,
-		int32 MidCount,
-		float MaxPerp,
-		float NoiseJitter,
-		float TangentStrength,
-		FRandomStream& Rng,
-		TArray<FVector>& OutPoints);
+        void MakeCurvedPath(const FVector& A, const FVector& B,
+                int32 MidCount,
+                float MaxPerp,
+                float NoiseJitter,
+                float TangentStrength,
+                float BaselineCurvature,
+                FRandomStream& Rng,
+                TArray<FVector>& OutPoints);
 
-	// Compute per-edge offset scale so paths near walls wiggle less
-	float EdgeOffsetScale(const FVector2f& A_L, const FVector2f& B_L, const FVector2f& H);
+        // Compute per-edge offset scale so paths near walls wiggle less
+        float EdgeOffsetScale(const FVector2f& A_L, const FVector2f& B_L, const FVector2f& H);
 
-	UPROPERTY() 
-	TArray<class USplineMeshComponent*> MeshSegments;
+        UPROPERTY()
+        TArray<class USplineMeshComponent*> MeshSegments;
 
-	void ClearMeshes();
+        void ClearMeshes();
+
+public:
+        // Returns minimal planar distance (XY) from the cached road polylines.
+        float DistanceToRoads(const FVector& Point) const;
 
 private:
-	UPROPERTY()
-	const UWorldGenSettings* GenSettings = nullptr;
+        UPROPERTY()
+        const UWorldGenSettings* GenSettings = nullptr;
 
-	float ClearanceToRect(const FVector2f& P, const FVector2f& H);
+        UPROPERTY(Transient)
+        TArray<TArray<FVector>> BuiltPaths;
+
+        float ClearanceToRect(const FVector2f& P, const FVector2f& H);
 
 };
