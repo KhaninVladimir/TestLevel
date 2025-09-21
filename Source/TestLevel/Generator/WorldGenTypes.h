@@ -81,6 +81,56 @@ struct FPOISpawn
 	float Weight = 1.f;
 };
 
+/** Static environment mesh spawn entry. */
+USTRUCT(BlueprintType)
+struct FEnvironmentSpawnEntry
+{
+	GENERATED_BODY();
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	UStaticMesh* Mesh = nullptr;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0"))
+	int32 MinCount = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0"))
+	int32 MaxCount = 0;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0.0"))
+	float Radius = 200.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0.0"))
+	float MinSpacing = 150.f;
+
+	// Keep some breathing room around entrance/exits/POIs so they stay reachable.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0.0"))
+	float ClearanceFromKeyPoints = 400.f;
+
+	// Corridor half-width that must remain unobstructed between entrance and every key point.
+	UPROPERTY(EditAnywhere, BlueprintReadWrite, meta = (ClampMin = "0.0"))
+	float CorridorHalfWidth = 250.f;
+
+	int32 ResolveCount(FRandomStream& Rng) const
+	{
+		const int32 Lo = FMath::Max(0, FMath::Min(MinCount, MaxCount));
+		const int32 Hi = FMath::Max(Lo, FMath::Max(MinCount, MaxCount));
+		return (Lo == Hi) ? Lo : Rng.RandRange(Lo, Hi);
+	}
+};
+
+/** Runtime obstacle description used by road/path planning. */
+USTRUCT(BlueprintType)
+struct FEnvironmentObstacle
+{
+	GENERATED_BODY();
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	FVector Location = FVector::ZeroVector;
+
+	UPROPERTY(EditAnywhere, BlueprintReadWrite)
+	float Radius = 0.f;
+};
+
 /** One doorway opening spec along a given side. */
 USTRUCT(BlueprintType)
 struct FDoorwaySpec

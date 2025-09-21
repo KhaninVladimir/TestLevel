@@ -63,6 +63,7 @@ protected:
 	void BuildWallsWithOpenings(const FDoorwaySpec& Entrance);
 	void SpawnFinishMarkers(TArray<AWorldFinishMarker*>& OutMarkers);
 	void SpawnPOIs(const FVector& EntranceWorld, TArray<AActor*>& OutPOIs);
+	void SpawnEnvironment();
 	void SpawnMonsters(TArray<AActor*>& OutMonsters);
 	void SpawnRoads();
 
@@ -82,8 +83,21 @@ private:
         TArray<AActor*> POIs;
 
         UPROPERTY(Transient)
+        FVector EntranceLocation = FVector::ZeroVector;
+
+        UPROPERTY(Transient)
+        TArray<FEnvironmentObstacle> EnvironmentObstacles;
+
+        UPROPERTY(Transient)
+        TArray<UInstancedStaticMeshComponent*> EnvironmentComponents;
+
+        UPROPERTY(Transient)
         FVector RoomCenter = FVector::ZeroVector;
 
         UPROPERTY(Transient)
         ARoadSegment* RoadNetwork = nullptr;
+
+        bool CanPlaceEnvironmentAt(const FVector& Candidate, const FEnvironmentSpawnEntry& Entry, const TArray<FVector>& CorridorTargets) const;
+        bool KeepsCorridorsOpen(const FVector2D& Candidate, float Radius, const FEnvironmentSpawnEntry& Entry, const TArray<FVector>& CorridorTargets) const;
+        static float DistancePointToSegment2D(const FVector2D& P, const FVector2D& A, const FVector2D& B);
 };

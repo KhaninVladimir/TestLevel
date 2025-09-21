@@ -16,6 +16,8 @@ ARoadSegment::ARoadSegment()
 void ARoadSegment::ClearNetwork()
 {
         BuiltPaths.Reset();
+        CachedObstacles.Reset();
+        CachedRoomHalfSize = FVector2f::ZeroVector;
 
         // Destroy all spline/spline mesh components created earlier
         TArray<UActorComponent*> Comps = GetComponents().Array();
@@ -144,12 +146,83 @@ void ARoadSegment::MakeCurvedPath(const FVector& A, const FVector& B,
                 const float baselineOffset = BaseSign * BaseAmplitude * edgeFalloff;
 
                 const FVector Offset = Perp * (sign * MaxPerp * edgeFalloff + baselineOffset) + FVector::UpVector * 0.f;
-                OutPoints.Add(Base + Offset + Dir * jitter * 0.1f);
+                FVector Candidate = Base + Offset + Dir * jitter * 0.1f;
+                Candidate = AdjustForObstacles(Candidate);
+                OutPoints.Add(Candidate);
         }
 
         OutPoints.Add(B);
 
 	// (Tangents are set when we build spline meshes from these points)
+}
+
+FVector ARoadSegment::AdjustForObstacles(const FVector& Point) const
+{
+        FVector Result = Point;
+
+        if (CachedObstacles.IsEmpty())
+        {
+                return ClampToRoomBounds(Result);
+        }
+
+        const float ExtraClearance = GenSettings ? FMath::Max(0.f, GenSettings->RoadExtraClearanceUU) : 0.f;
+
+        for (int32 Iter = 0; Iter < 4; ++Iter)
+        {
+                bool bAdjusted = false;
+                for (const FEnvironmentObstacle& Ob : CachedObstacles)
+                {
+                        const FVector2D P2(Result.X, Result.Y);
+                        const FVector2D O2(Ob.Location.X, Ob.Location.Y);
+                        const float Desired = Ob.Radius + ExtraClearance;
+                        const float Dist = FVector2D::Distance(P2, O2);
+
+                        if (Desired > KINDA_SMALL_NUMBER && Dist < Desired)
+                        {
+                                FVector2D Dir = P2 - O2;
+                                if (Dir.IsNearlyZero())
+                                {
+                                        Dir = FVector2D(1.f, 0.f);
+                                }
+                                Dir.Normalize();
+                                const float Push = Desired - Dist;
+                                Result.X += Dir.X * Push;
+                                Result.Y += Dir.Y * Push;
+                                bAdjusted = true;
+                        }
+                }
+
+                Result = ClampToRoomBounds(Result);
+
+                if (!bAdjusted)
+                {
+                        break;
+                }
+        }
+
+        return Result;
+}
+
+FVector ARoadSegment::ClampToRoomBounds(const FVector& Point) const
+{
+        if (CachedRoomHalfSize.X <= KINDA_SMALL_NUMBER || CachedRoomHalfSize.Y <= KINDA_SMALL_NUMBER)
+        {
+                return Point;
+        }
+
+        const FTransform ActorXf = GetActorTransform();
+        FVector Local = ActorXf.InverseTransformPosition(Point);
+
+        const float MarginX = GenSettings ? FMath::Clamp(GenSettings->RoadMargin.X, 0.f, CachedRoomHalfSize.X) : 0.f;
+        const float MarginY = GenSettings ? FMath::Clamp(GenSettings->RoadMargin.Y, 0.f, CachedRoomHalfSize.Y) : 0.f;
+
+        const float LimitX = FMath::Max(0.f, CachedRoomHalfSize.X - MarginX);
+        const float LimitY = FMath::Max(0.f, CachedRoomHalfSize.Y - MarginY);
+
+        Local.X = FMath::Clamp(Local.X, -LimitX, LimitX);
+        Local.Y = FMath::Clamp(Local.Y, -LimitY, LimitY);
+
+        return ActorXf.TransformPosition(Local);
 }
 
 void ARoadSegment::BuildOnePath(const TArray<FVector>& PathPointsWS)
@@ -286,7 +359,7 @@ int32 ARoadSegment::FindNearestPointOnPath(const FVector& Point, const TArray<FV
 	return BestIdx;
 }
 
-void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount, const FVector2f& RoomHalfSize, const UWorldGenSettings* Settings, FRandomStream& Rng)
+void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount, const FVector2f& RoomHalfSize, const UWorldGenSettings* Settings, FRandomStream& Rng, const TArray<FEnvironmentObstacle>& Obstacles)
 {
         BuiltPaths.Reset();
 
@@ -296,6 +369,9 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
 
 	// Clean old paths
 	ClearNetwork();
+
+	CachedObstacles = Obstacles;
+	CachedRoomHalfSize = RoomHalfSize;
 
 	// Validate indices
 	const int32 EntryIdx = 0;
@@ -339,6 +415,7 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
 	ExitDir.Z = 0; // Keep it horizontal
 	ExitDir.Normalize();
 	FVector OffsetPoint = NodesWS[FarthestExitIdx] - ExitDir * ExitOffset;
+	OffsetPoint = AdjustForObstacles(OffsetPoint);
 
 	// Build curved path to offset point
 	TArray<FVector> MainPath;
@@ -374,6 +451,7 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
 		ExitDirLocal.Z = 0;
 		ExitDirLocal.Normalize();
 		FVector OffsetPointLocal = NodesWS[i] - ExitDirLocal * ExitOffset;
+		OffsetPointLocal = AdjustForObstacles(OffsetPointLocal);
 
 		// Build path from connection point to offset point
 		TArray<FVector> ExitPath;

@@ -19,7 +19,7 @@ class TESTLEVEL_API ARoadSegment : public AActor
 public:
 	ARoadSegment();
 
-	void BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount, const FVector2f& RoomHalfSize, const UWorldGenSettings* Settings, FRandomStream& Rng);
+	void BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount, const FVector2f& RoomHalfSize, const UWorldGenSettings* Settings, FRandomStream& Rng, const TArray<FEnvironmentObstacle>& Obstacles);
 
 	void ClearNetwork();
 
@@ -48,6 +48,9 @@ protected:
         // Compute per-edge offset scale so paths near walls wiggle less
         float EdgeOffsetScale(const FVector2f& A_L, const FVector2f& B_L, const FVector2f& H);
 
+        FVector AdjustForObstacles(const FVector& Point) const;
+        FVector ClampToRoomBounds(const FVector& Point) const;
+
         UPROPERTY()
         TArray<class USplineMeshComponent*> MeshSegments;
 
@@ -62,6 +65,8 @@ private:
         const UWorldGenSettings* GenSettings = nullptr;
 
         TArray<TArray<FVector>> BuiltPaths;
+        TArray<FEnvironmentObstacle> CachedObstacles;
+        FVector2f CachedRoomHalfSize = FVector2f::ZeroVector;
 
         float ClearanceToRect(const FVector2f& P, const FVector2f& H);
 
