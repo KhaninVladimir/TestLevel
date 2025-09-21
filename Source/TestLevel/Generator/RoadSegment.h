@@ -23,53 +23,12 @@ public:
 
 	void ClearNetwork();
 
+	// Returns minimal planar distance (XY) from the cached road polylines.
+	float DistanceToRoads(const FVector& Point) const;
+
 protected:
 	UPROPERTY(VisibleAnywhere)
 	USceneComponent* Root;
 
-        void BuildOnePath(const TArray<FVector>& PathPointsWS);
-
-        bool FindNearestPointOnPath(const FVector& Point, const TArray<FVector>& Path, FVector& OutPoint, float& OutDistSq) const;
-        bool FindNearestPointOnPathDetailed(const FVector& Point, const TArray<FVector>& Path, FVector& OutPoint, FVector& OutTangent,
-                float& OutDistSq, int32* OutSegmentIdx = nullptr, float* OutSegmentT = nullptr) const;
-
-	// Utility used by BuildNetwork
-	void ComputeMST_Prim(const TArray<FVector2f>& PtsLocal, TArray<FIntPoint>& OutEdges);
-	void MaybeAddShortcuts(const TArray<FVector2f>& PtsLocal, const FVector2f& H, TArray<FIntPoint>& InOutEdges);
-
-	// Generate naturally-curved path points for the edge (A,B)
-        void MakeCurvedPath(const FVector& A, const FVector& B,
-                int32 MidCount,
-                float MaxPerp,
-                float NoiseJitter,
-                float TangentStrength,
-                float BaselineCurvature,
-                FRandomStream& Rng,
-                TArray<FVector>& OutPoints);
-
-        // Compute per-edge offset scale so paths near walls wiggle less
-        float EdgeOffsetScale(const FVector2f& A_L, const FVector2f& B_L, const FVector2f& H);
-
-        FVector AdjustForObstacles(const FVector& Point) const;
-        FVector ClampToRoomBounds(const FVector& Point) const;
-
-        UPROPERTY()
-        TArray<class USplineMeshComponent*> MeshSegments;
-
-        void ClearMeshes();
-
-public:
-        // Returns minimal planar distance (XY) from the cached road polylines.
-        float DistanceToRoads(const FVector& Point) const;
-
-private:
-        UPROPERTY()
-        const UWorldGenSettings* GenSettings = nullptr;
-
-        TArray<TArray<FVector>> BuiltPaths;
-        TArray<FEnvironmentObstacle> CachedObstacles;
-        FVector2f CachedRoomHalfSize = FVector2f::ZeroVector;
-
-        float ClearanceToRect(const FVector2f& P, const FVector2f& H);
 
 };
