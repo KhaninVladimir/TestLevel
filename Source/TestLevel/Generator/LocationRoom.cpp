@@ -19,9 +19,11 @@ ALocationRoom::ALocationRoom()
 
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
+	Root->SetMobility(EComponentMobility::Static);
 
 	WallISM = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("WallISM"));
 	WallISM->SetupAttachment(RootComponent);
+	WallISM->SetMobility(EComponentMobility::Static);
 }
 
 FVector2f ALocationRoom::GetHalfSize() const
@@ -546,6 +548,7 @@ void ALocationRoom::SpawnEnvironment()
 		Comp->RegisterComponent();
 		Comp->SetStaticMesh(Entry.Mesh);
 		Comp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+		Comp->SetMobility(EComponentMobility::Static);
 		EnvironmentComponents.Add(Comp);
 
 		const float MarginX = FMath::Max(Entry.Radius, GenSettings->RoadMargin.X);

@@ -23,7 +23,7 @@ class UInstancedStaticMeshComponent;
 UCLASS(Blueprintable)
 class TESTLEVEL_API ALocationRoom : public AActor
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
 public:
 	ALocationRoom();
 
@@ -36,24 +36,24 @@ protected:
 	USceneComponent* Root;
 
 	// Visual walls as segments; could be HISM for efficiency if desired.
-	UPROPERTY(VisibleAnywhere) 
+	UPROPERTY(VisibleAnywhere)
 	UInstancedStaticMeshComponent* WallISM;
 
 	// Cached for convenience
-	UPROPERTY() 
+	UPROPERTY()
 	const UWorldGenSettings* GenSettings = nullptr;
-	UPROPERTY() 
+	UPROPERTY()
 	FRandomStream Rng;
 
 	// Geometry helpers
-        FVector2f GetHalfSize() const;
-        FVector SideOriginWorld(ERoomSide Side) const;
-        FVector SideDirection(ERoomSide Side) const;
-        FVector SideDirectionWorld(ERoomSide Side) const;
-        FVector LocalOut(ERoomSide) const;
-        bool IsInsideRoom(const FVector& P) const;
-        bool SatisfiesMinDist(const FVector& P, const TArray<FVector>& Points, float MinDist) const;
-        float DistanceToRoads(const FVector& P) const;
+	FVector2f GetHalfSize() const;
+	FVector SideOriginWorld(ERoomSide Side) const;
+	FVector SideDirection(ERoomSide Side) const;
+	FVector SideDirectionWorld(ERoomSide Side) const;
+	FVector LocalOut(ERoomSide) const;
+	bool IsInsideRoom(const FVector& P) const;
+	bool SatisfiesMinDist(const FVector& P, const TArray<FVector>& Points, float MinDist) const;
+	float DistanceToRoads(const FVector& P) const;
 
 
 	// Steps
@@ -79,25 +79,25 @@ private:
 	UPROPERTY(Transient)
 	TArray<FVector> RoadPoint;
 
-        UPROPERTY(Transient)
-        TArray<AActor*> POIs;
+	UPROPERTY(Transient)
+	TArray<AActor*> POIs;
 
-        UPROPERTY(Transient)
-        FVector EntranceLocation = FVector::ZeroVector;
+	UPROPERTY(Transient)
+	FVector EntranceLocation = FVector::ZeroVector;
 
-        UPROPERTY(Transient)
-        TArray<FEnvironmentObstacle> EnvironmentObstacles;
+	UPROPERTY(Transient)
+	TArray<FEnvironmentObstacle> EnvironmentObstacles;
 
-        UPROPERTY(Transient)
-        TArray<UInstancedStaticMeshComponent*> EnvironmentComponents;
+	UPROPERTY(Transient)
+	TArray<UInstancedStaticMeshComponent*> EnvironmentComponents;
 
-        UPROPERTY(Transient)
-        FVector RoomCenter = FVector::ZeroVector;
+	UPROPERTY(Transient)
+	FVector RoomCenter = FVector::ZeroVector;
 
-        UPROPERTY(Transient)
-        ARoadSegment* RoadNetwork = nullptr;
+	UPROPERTY(Transient)
+	ARoadSegment* RoadNetwork = nullptr;
 
-        bool CanPlaceEnvironmentAt(const FVector& Candidate, const FEnvironmentSpawnEntry& Entry, const TArray<FVector>& CorridorTargets) const;
-        bool KeepsCorridorsOpen(const FVector2D& Candidate, float Radius, const FEnvironmentSpawnEntry& Entry, const TArray<FVector>& CorridorTargets) const;
-        static float DistancePointToSegment2D(const FVector2D& P, const FVector2D& A, const FVector2D& B);
+	bool CanPlaceEnvironmentAt(const FVector& Candidate, const FEnvironmentSpawnEntry& Entry, const TArray<FVector>& CorridorTargets) const;
+	bool KeepsCorridorsOpen(const FVector2D& Candidate, float Radius, const FEnvironmentSpawnEntry& Entry, const TArray<FVector>& CorridorTargets) const;
+	static float DistancePointToSegment2D(const FVector2D& P, const FVector2D& A, const FVector2D& B);
 };

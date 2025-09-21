@@ -15,7 +15,7 @@
 UCLASS(BlueprintType)
 class TESTLEVEL_API UWorldGenSettings : public UDataAsset
 {
-    GENERATED_BODY()
+	GENERATED_BODY()
 
 public:
 	// --- Room ---
@@ -54,21 +54,18 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
 	float RoadMaxPerpOffset = 600.f;
 
-        UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
-        float RoadNoiseJitter = 150.f;
-
-        UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
-        float RoadTangentStrength = 800.f;
-
-        // Adds a gentle baseline curvature to every road (scaled by path length).
-        UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
-        float RoadBaselineCurvature = 0.05f;
-
-        UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
-        FVector2f RoadMargin = FVector2f(100.f, 100.f);
-	
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
-	float RoadExitApproachOffset = 100.f;
+	float RoadNoiseJitter = 150.f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
+	float RoadTangentStrength = 800.f;
+
+	// Adds a gentle baseline curvature to every road (scaled by path length).
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
+	float RoadBaselineCurvature = 0.05f;
+
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
+	FVector2f RoadMargin = FVector2f(100.f, 100.f);
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
 	float RoadExtraClearanceUU = 100.f;
@@ -102,14 +99,14 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Monsters")
 	FIntRangeInclusive MonsterPackCountRange{ 1, 3 };
 
-        UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Monsters")
-        float MonsterMinDistanceFromPortals = 700.f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Monsters")
+	float MonsterMinDistanceFromPortals = 700.f;
 
-        UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Monsters")
-        float MonsterMinDistanceFromPOI = 500.f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Monsters")
+	float MonsterMinDistanceFromPOI = 500.f;
 
-        UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Monsters")
-        float MonsterMinDistanceFromRoad = 400.f;
+	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Monsters")
+	float MonsterMinDistanceFromRoad = 400.f;
 
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Monsters")
 	TArray<FMonsterSpawn> MonsterTable;
