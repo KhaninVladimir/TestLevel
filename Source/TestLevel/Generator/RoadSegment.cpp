@@ -133,19 +133,27 @@ void ARoadSegment::MakeCurvedPath(const FVector& A, const FVector& B,
         const float BaseSign = (BaselineCurvature != 0.f) ? (Rng.FRand() < 0.5f ? -1.f : 1.f) : 0.f;
         const float BaseAmplitude = FMath::Max(0.f, BaselineCurvature) * Len;
 
+        // Remember the previous lateral offset so the curve changes smoothly instead of
+        // rapidly zig-zagging left/right between midpoints.
+        float PrevOffset = 0.f;
+
         for (int32 i = 1; i <= MidCount; ++i)
         {
                 const float t = static_cast<float>(i) / (MidCount + 1);
                 const FVector Base = A + Dir * (t * Len);
 
-                // Alternate left/right with decreasing amplitude towards ends
                 const float edgeFalloff = FMath::Sin(PI * t);         // 0..1..0
-                const float sign = (i % 2 == 0) ? -1.f : +1.f;
                 const float jitter = Rng.FRandRange(-NoiseJitter, +NoiseJitter);
 
                 const float baselineOffset = BaseSign * BaseAmplitude * edgeFalloff;
 
-                const FVector Offset = Perp * (sign * MaxPerp * edgeFalloff + baselineOffset) + FVector::UpVector * 0.f;
+                // Blend towards a new random target offset so the road bends smoothly.
+                const float TargetOffset = Rng.FRandRange(-MaxPerp, MaxPerp) * edgeFalloff;
+                PrevOffset = FMath::Lerp(PrevOffset, TargetOffset, 0.5f);
+
+                const float TotalOffset = baselineOffset + PrevOffset;
+
+                const FVector Offset = Perp * TotalOffset + FVector::UpVector * 0.f;
                 FVector Candidate = Base + Offset + Dir * jitter * 0.1f;
                 Candidate = AdjustForObstacles(Candidate);
                 OutPoints.Add(Candidate);
