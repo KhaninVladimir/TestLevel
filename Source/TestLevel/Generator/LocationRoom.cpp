@@ -51,27 +51,27 @@ FVector ALocationRoom::RoomLocalToWorld(const FVector& L) const
 
 FVector ALocationRoom::SideOriginWorld(ERoomSide Side) const
 {
-        const FVector2f H = GetHalfSize();
-        const FVector Center = GetRoomCenter();
-        const FQuat RoomQ = GetActorQuat();
-        const FVector LocalOffset = LocalOut(Side) * FVector(H.X, H.Y, 0.f);
+	const FVector2f H = GetHalfSize();
+	const FVector Center = GetRoomCenter();
+	const FQuat RoomQ = GetActorQuat();
+	const FVector LocalOffset = LocalOut(Side) * FVector(H.X, H.Y, 0.f);
 
-        return Center + RoomQ.RotateVector(LocalOffset);
+	return Center + RoomQ.RotateVector(LocalOffset);
 }
 
 FVector ALocationRoom::SideDirection(ERoomSide Side) const
 {
-        if (Side == ERoomSide::North || Side == ERoomSide::South)
-        {
-                return FVector(1, 0, 0); // along X
-        }
-        return FVector(0, 1, 0); // along Y
+	if (Side == ERoomSide::North || Side == ERoomSide::South)
+	{
+		return FVector(1, 0, 0); // along X
+	}
+	return FVector(0, 1, 0); // along Y
 }
 
 FVector ALocationRoom::SideDirectionWorld(ERoomSide Side) const
 {
-        const FQuat RoomQ = GetActorQuat();
-        return RoomQ.RotateVector(SideDirection(Side));
+	const FQuat RoomQ = GetActorQuat();
+	return RoomQ.RotateVector(SideDirection(Side));
 }
 
 FVector ALocationRoom::LocalOut(ERoomSide Side) const
@@ -138,15 +138,15 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 	Entrance.HalfWidth = GenSettings->DoorwayHalfWidth;
 	Entrance.WorldTransform = GetActorTransform();
 
-        const FVector OutWS = RoomQ.RotateVector(LocalOut(Entrance.Side)).GetSafeNormal();
-        const FVector AlongWS = SideDirectionWorld(Entrance.Side).GetSafeNormal();
+	const FVector OutWS = RoomQ.RotateVector(LocalOut(Entrance.Side)).GetSafeNormal();
+	const FVector AlongWS = SideDirectionWorld(Entrance.Side).GetSafeNormal();
 	const FVector2f H = GetHalfSize();
 	const float HalfSpanToSide = (Entrance.Side == ERoomSide::North || Entrance.Side == ERoomSide::South) ? H.Y : H.X;
 	RoomCenter = EntranceWorld - OutWS * HalfSpanToSide - AlongWS * Entrance.OffsetAlongSide;
 
 	// --- 3) Compute along-offset ON THAT SIDE (rotation-aware) ---
-        const FVector SideOriginNow = SideOriginWorld(EntranceSide);
-        const FVector AlongDir = SideDirectionWorld(EntranceSide);
+	const FVector SideOriginNow = SideOriginWorld(EntranceSide);
+	const FVector AlongDir = SideDirectionWorld(EntranceSide);
 
 	const float HalfSpan = (EntranceSide == ERoomSide::North || EntranceSide == ERoomSide::South)
 		? GenSettings->RoomSize.Width * 0.5f    // span along local X
@@ -163,7 +163,7 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 
 	// --- 4) Exits (same logic; rotation-aware later when converting to world) ---
 	const int32 ExitCount = GenSettings->ExitCountRange.ClampRand(Rng);
-	
+
 	Exits.Empty();
 	Exits.Reserve(ExitCount);
 
@@ -175,7 +175,7 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 		{
 			Sides = { ERoomSide::North, ERoomSide::South, ERoomSide::East, ERoomSide::West };
 		}
-		
+
 		FDoorwaySpec D;
 		D.Side = Sides[Rng.RandRange(0, Sides.Num() - 1)];
 
@@ -202,14 +202,14 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 				if (E.Side == D.Side &&
 					FMath::Abs(Off - E.OffsetAlongSide) < (GenSettings->DoorwayHalfWidth * 3.f))
 				{
-					bOk = false; 
+					bOk = false;
 					break;
 				}
 			}
-			if (bOk) 
-			{ 
-				D.OffsetAlongSide = Off; 
-				break; 
+			if (bOk)
+			{
+				D.OffsetAlongSide = Off;
+				break;
 			}
 		}
 
@@ -221,13 +221,13 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 
 		D.HalfWidth = GenSettings->DoorwayHalfWidth;
 
-                const FVector DOriginWS = SideOriginWorld(D.Side);
-                const FVector DAlongWS = SideDirectionWorld(D.Side).GetSafeNormal();
-                const FVector CenterWS = DOriginWS + DAlongWS * D.OffsetAlongSide;
+		const FVector DOriginWS = SideOriginWorld(D.Side);
+		const FVector DAlongWS = SideDirectionWorld(D.Side).GetSafeNormal();
+		const FVector CenterWS = DOriginWS + DAlongWS * D.OffsetAlongSide;
 
-                const FVector DOutWS = RoomQ.RotateVector(LocalOut(D.Side)).GetSafeNormal();
+		const FVector DOutWS = RoomQ.RotateVector(LocalOut(D.Side)).GetSafeNormal();
 		const FRotator RotWS = UKismetMathLibrary::MakeRotFromXZ(DOutWS, FVector::UpVector);
-		
+
 		D.WorldTransform = FTransform(RotWS, CenterWS);
 		Exits.Add(D);
 	}
@@ -285,7 +285,7 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
 			// Gather openings for this side once
 			TArray<FDoorwaySpec> Openings;
 			Openings.Reserve(1 + Exits.Num());
-			if (Entrance.Side == Side) 
+			if (Entrance.Side == Side)
 				Openings.Add(Entrance);
 			for (const FDoorwaySpec& E : Exits)
 			{
@@ -293,11 +293,11 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
 					Openings.Add(E);
 			}
 
-      const FVector SideOrigin = SideOriginWorld(Side);
-      сonst FVector Along = SideDirectionWorld(Side).GetSafeNormal();
+			const FVector SideOrigin = SideOriginWorld(Side);
+			const FVector Along = SideDirectionWorld(Side).GetSafeNormal();
 
-       // Rotation for all segments on this side is constant
-       const FQuat SegmentRot = Along.Rotation().Quaternion();
+			// Rotation for all segments on this side is constant
+			const FQuat SegmentRot = Along.Rotation().Quaternion();
 
 			// Fast path: no openings → add all segments
 			if (Openings.Num() == 0)
@@ -306,11 +306,11 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
 				{
 					const float CenterOff = -Span * 0.5f + (i + 0.5f) * Step;
 
-                                        FTransform T;
-                                        T.SetLocation(SideOrigin + Along * CenterOff);
-                                        T.SetRotation(SegmentRot);
-                                        T.SetScale3D(FVector(1, 1, 1));
-                                        WallISM->AddInstanceWorldSpace(T);
+					FTransform T;
+					T.SetLocation(SideOrigin + Along * CenterOff);
+					T.SetRotation(SegmentRot);
+					T.SetScale3D(FVector(1, 1, 1));
+					WallISM->AddInstance(T, true);
 				}
 				return;
 			}
@@ -331,11 +331,11 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
 				}
 				if (bCovered) continue;
 
-                                FTransform T;
-                                T.SetLocation(SideOrigin + Along * CenterOff);
-                                T.SetRotation(SegmentRot);
-                                T.SetScale3D(FVector(1, 1, 1));
-                                WallISM->AddInstanceWorldSpace(T);
+				FTransform T;
+				T.SetLocation(SideOrigin + Along * CenterOff);
+				T.SetRotation(SegmentRot);
+				T.SetScale3D(FVector(1, 1, 1));
+				WallISM->AddInstance(T, true);
 			}
 		};
 
@@ -366,8 +366,8 @@ void ALocationRoom::SpawnFinishMarkers(TArray<AWorldFinishMarker*>& OutMarkers)
 
 	for (const FDoorwaySpec& D : Exits)
 	{
-                const FVector Origin = SideOriginWorld(D.Side);
-                const FVector Along = SideDirectionWorld(D.Side);
+		const FVector Origin = SideOriginWorld(D.Side);
+		const FVector Along = SideDirectionWorld(D.Side);
 		const FVector P = Origin + Along * D.OffsetAlongSide;
 
 		if (AWorldFinishMarker* Marker = W->SpawnActor<AWorldFinishMarker>(AWorldFinishMarker::StaticClass(), D.WorldTransform))
@@ -383,17 +383,17 @@ void ALocationRoom::SpawnPOIs(const FVector& EntranceWorld, TArray<AActor*>& Out
 	UWorld* W = GetWorld();
 	if (!W || !GenSettings) return;
 
-	if (Rng.FRand() > GenSettings->POISpawnChance) 
+	if (Rng.FRand() > GenSettings->POISpawnChance)
 		return;
 
 	const int32 Count = GenSettings->POICountRange.ClampRand(Rng);
-	if (Count <= 0 || GenSettings->POITable.Num() == 0) 
+	if (Count <= 0 || GenSettings->POITable.Num() == 0)
 		return;
 
 	// Build weights & precompute index of max weight (exactly the same selection policy as before)
 	TArray<float> Weights;
 	Weights.Reserve(GenSettings->POITable.Num());
-	for (const FPOISpawn& E : GenSettings->POITable) 
+	for (const FPOISpawn& E : GenSettings->POITable)
 		Weights.Add(FMath::Max(0.f, E.Weight));
 
 	int32 MaxIdx = 0;
@@ -425,11 +425,11 @@ void ALocationRoom::SpawnPOIs(const FVector& EntranceWorld, TArray<AActor*>& Out
 				0.f);
 			const FVector P = RoomLocalToWorld(L);
 
-			if (!IsInsideRoom(P)) 
+			if (!IsInsideRoom(P))
 				continue;
-			if (FVector::Dist2D(P, EntranceWorld) < GenSettings->POIMinDistanceFromPortals) 
+			if (FVector::Dist2D(P, EntranceWorld) < GenSettings->POIMinDistanceFromPortals)
 				continue;
-			if (!SatisfiesMinDist(P, Placed, GenSettings->POIMinDistanceBetween)) 
+			if (!SatisfiesMinDist(P, Placed, GenSettings->POIMinDistanceBetween))
 				continue;
 
 			if (TSubclassOf<AActor> C = RandPOIClass())
@@ -438,12 +438,12 @@ void ALocationRoom::SpawnPOIs(const FVector& EntranceWorld, TArray<AActor*>& Out
 				{
 					Placed.Add(P);
 					OutPOIs.Add(A);
-					
+
 					if (Rng.FRand() <= GenSettings->ProbabilityOfRoadToPOI)
 					{
 						RoadPoint.Add(P);
 					}
-						
+
 
 					break;
 				}
@@ -466,19 +466,19 @@ void ALocationRoom::SpawnMonsters(TArray<AActor*>& OutMonsters)
 	// Collect POI world positions
 	TArray<FVector> POIPoints;
 	POIPoints.Reserve(POIs.Num());
-	for (AActor* A : POIs) 
+	for (AActor* A : POIs)
 		if (A) POIPoints.Add(A->GetActorLocation());
 
 	auto PickMonsterClass = [&]() -> TSubclassOf<AActor>
 		{
 			float Total = 0.f;
-			for (const auto& E : GenSettings->MonsterTable) 
+			for (const auto& E : GenSettings->MonsterTable)
 				Total += FMath::Max(0.f, E.Weight);
 			float R = Rng.FRandRange(0.f, FMath::Max(0.001f, Total));
 			for (const auto& E : GenSettings->MonsterTable)
 			{
 				const float Wt = FMath::Max(0.f, E.Weight);
-				if ((R -= Wt) <= 0.f) 
+				if ((R -= Wt) <= 0.f)
 					return E.Class;
 			}
 			return GenSettings->MonsterTable.Last().Class;
@@ -500,7 +500,7 @@ void ALocationRoom::SpawnMonsters(TArray<AActor*>& OutMonsters)
 		TotalNeed += Pk.Count;
 		PackList.Add(Pk);
 	}
-	if (TotalNeed <= 0) 
+	if (TotalNeed <= 0)
 		return;
 
 	// Clamp margins to not exceed half-size
@@ -566,7 +566,7 @@ void ALocationRoom::SpawnMonsters(TArray<AActor*>& OutMonsters)
 		Chosen.Add(P);
 	}
 
-	if (Chosen.IsEmpty()) 
+	if (Chosen.IsEmpty())
 		return;
 
 	// Shuffle a bit so packs distribute across the whole room
@@ -577,7 +577,7 @@ void ALocationRoom::SpawnMonsters(TArray<AActor*>& OutMonsters)
 	int32 idx = 0;
 	for (const FPack& Pk : PackList)
 	{
-		if (!Pk.Class) 
+		if (!Pk.Class)
 			continue;
 		for (int32 i = 0; i < Pk.Count && idx < Chosen.Num(); ++i, ++idx)
 		{
