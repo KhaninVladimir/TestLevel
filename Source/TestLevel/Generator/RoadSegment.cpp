@@ -18,6 +18,7 @@ void ARoadSegment::ClearNetwork()
         BuiltPaths.Reset();
         CachedObstacles.Reset();
         CachedRoomHalfSize = FVector2f::ZeroVector;
+        CachedSplineSamples.Reset();
 
         // Destroy all spline/spline mesh components created earlier
         TArray<UActorComponent*> Comps = GetComponents().Array();
@@ -134,6 +135,8 @@ void ARoadSegment::MakeCurvedPath(const FVector& A, const FVector& B,
         const float BaseAmplitude = FMath::Max(0.f, BaselineCurvature) * Len;
         const float WavePhase = Rng.FRandRange(0.f, 2.f * PI);
         const float WaveFrequency = Rng.FRandRange(0.65f, 1.35f);
+        const float PerlinSeed = Rng.FRandRange(-1000.f, 1000.f);
+        const float PerlinAmplitude = FMath::Max(0.f, NoiseJitter) * 0.5f;
 
         // Remember the previous lateral offset so the curve changes smoothly instead of
         // rapidly zig-zagging left/right between midpoints.
@@ -156,7 +159,9 @@ void ARoadSegment::MakeCurvedPath(const FVector& A, const FVector& B,
                 PrevOffset = FMath::Lerp(PrevOffset, BaselineOffset + WaveOffset + TargetOffset, BlendAlpha);
 
                 const float jitter = Rng.FRandRange(-NoiseJitter, +NoiseJitter) * EdgeFalloff;
-                const FVector Offset = Perp * PrevOffset + Dir * jitter * 0.1f;
+                const float PerlinSample = FMath::PerlinNoise1D(PerlinSeed + SmoothT * 2.37f);
+                const FVector PerlinOffset = Perp * (PerlinSample * PerlinAmplitude * EdgeFalloff);
+                const FVector Offset = Perp * PrevOffset + Dir * jitter * 0.1f + PerlinOffset;
                 FVector Candidate = Base + Offset;
                 Candidate = AdjustForObstacles(Candidate);
                 OutPoints.Add(Candidate);
@@ -236,11 +241,11 @@ FVector ARoadSegment::ClampToRoomBounds(const FVector& Point) const
         return ActorXf.TransformPosition(Local);
 }
 
-void ARoadSegment::BuildOnePath(const TArray<FVector>& PathPointsWS)
+void ARoadSegment::BuildOnePath(const TArray<FVector>& PathPointsWS, TArray<FVector>* OutSampledPoints)
 {
-	if (!GenSettings || !GenSettings->RoadSplineMesh || PathPointsWS.Num() < 2) return;
+        if (!GenSettings || !GenSettings->RoadSplineMesh || PathPointsWS.Num() < 2) return;
 
-	// --- 1) Densify the input polyline so the spline has enough control points ---
+        // --- 1) Densify the input polyline so the spline has enough control points ---
 	TArray<FVector> DensePts;
 	DensePts.Reserve(PathPointsWS.Num() * 4);
 	DensePts.Add(PathPointsWS[0]);
@@ -303,10 +308,10 @@ void ARoadSegment::BuildOnePath(const TArray<FVector>& PathPointsWS)
 	const int32 NumSegments = FMath::Max(1, FMath::RoundToInt(PathLen / MeshLenApprox));
 	const float Step = PathLen / static_cast<float>(NumSegments);
 
-	for (int32 s = 0; s < NumSegments; ++s)
-	{
-		const float D0 = s * Step;
-		const float D1 = (s + 1) * Step;
+        for (int32 s = 0; s < NumSegments; ++s)
+        {
+                const float D0 = s * Step;
+                const float D1 = (s + 1) * Step;
 
 		// Use WORLD space here because we sampled the spline in world and will keep world transforms on SMC
 		const FVector StartPos = Spline->GetLocationAtDistanceAlongSpline(D0, ESplineCoordinateSpace::World);
@@ -333,11 +338,31 @@ void ARoadSegment::BuildOnePath(const TArray<FVector>& PathPointsWS)
 		SMC->RegisterComponent();
 
 		SMC->SetStartAndEnd(StartPos, StartTangent, EndPos, EndTangent, true);
-		SMC->SetStartScale(FVector2D(1.f, 1.f));
-		SMC->SetEndScale(FVector2D(1.f, 1.f));
-		SMC->SetStartRoll(0.f);
-		SMC->SetEndRoll(0.f);
-	}
+                SMC->SetStartScale(FVector2D(1.f, 1.f));
+                SMC->SetEndScale(FVector2D(1.f, 1.f));
+                SMC->SetStartRoll(0.f);
+                SMC->SetEndRoll(0.f);
+        }
+
+        // --- 5) Sample dense points along the spline to reuse for future path searches ---
+        const float SampleSpacing = FMath::Clamp(MeshLenApprox * 0.35f, 100.f, 320.f);
+        const int32 SampleSteps = FMath::Max(1, FMath::RoundToInt(PathLen / SampleSpacing));
+
+        TArray<FVector> LocalSamples;
+        TArray<FVector>& SamplesOut = OutSampledPoints ? *OutSampledPoints : LocalSamples;
+
+        const int32 ReserveCount = SamplesOut.Num() + SampleSteps + 1;
+        SamplesOut.Reserve(ReserveCount);
+
+        for (int32 StepIdx = 0; StepIdx <= SampleSteps; ++StepIdx)
+        {
+                const float Alpha = (SampleSteps <= 0) ? 0.f : static_cast<float>(StepIdx) / static_cast<float>(SampleSteps);
+                const float Distance = FMath::Lerp(0.f, PathLen, Alpha);
+                const FVector Sample = Spline->GetLocationAtDistanceAlongSpline(Distance, ESplineCoordinateSpace::World);
+                SamplesOut.Add(Sample);
+        }
+
+        CachedSplineSamples.Append(SamplesOut);
 }
 
 bool ARoadSegment::FindNearestPointOnPathDetailed(const FVector& Point, const TArray<FVector>& Path, FVector& OutPoint, FVector& OutTangent,
@@ -447,21 +472,106 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
 		PtsLocal.Add(FVector2f(L.X, L.Y));
 	}
 
-	// Storage for all paths
-	TArray<TArray<FVector>> AllPaths;
+        // Storage for all paths and sampled spline points we can reuse for future branches
+        TArray<TArray<FVector>> AllPaths;
+        AllPaths.Reserve(NodesWS.Num());
 
-	// 1. Find the farthest exit from entry
-	int32 FarthestExitIdx = FirstExitIdx;
-	float MaxDist = 0.0f;
-	for (int32 i = FirstExitIdx; i <= LastExitIdx; ++i)
-	{
-		float Dist = FVector::Dist(NodesWS[EntryIdx], NodesWS[i]);
-		if (Dist > MaxDist)
-		{
-			MaxDist = Dist;
-			FarthestExitIdx = i;
-		}
-	}
+        TArray<FVector> AvailableRoadPoints;
+        AvailableRoadPoints.Reserve(NodesWS.Num() * 8);
+
+        TArray<FVector> TempSamples;
+        TempSamples.Reserve(128);
+
+        auto SamplePathAndCache = [&](const TArray<FVector>& Path)
+                {
+                        TempSamples.Reset();
+                        BuildOnePath(Path, &TempSamples);
+                        AvailableRoadPoints.Append(TempSamples);
+                };
+
+        auto ResolveConnection = [&](const FVector& Target, FVector& OutPoint, FVector& OutTangent)->bool
+                {
+                        if (AllPaths.Num() == 0 || AvailableRoadPoints.Num() == 0)
+                        {
+                                return false;
+                        }
+
+                        float BestSampleDistSq = FLT_MAX;
+                        FVector ClosestSample = AvailableRoadPoints[0];
+                        for (const FVector& Sample : AvailableRoadPoints)
+                        {
+                                const float DistSq = FVector::DistSquaredXY(Target, Sample);
+                                if (DistSq < BestSampleDistSq)
+                                {
+                                        BestSampleDistSq = DistSq;
+                                        ClosestSample = Sample;
+                                }
+                        }
+
+                        bool bFound = false;
+                        float BestDistSq = FLT_MAX;
+                        FVector BestPoint = ClosestSample;
+                        FVector BestTangent = FVector::ZeroVector;
+
+                        for (const TArray<FVector>& Path : AllPaths)
+                        {
+                                FVector CandidatePoint = FVector::ZeroVector;
+                                FVector CandidateTangent = FVector::ZeroVector;
+                                float DistSq = 0.f;
+                                if (FindNearestPointOnPathDetailed(ClosestSample, Path, CandidatePoint, CandidateTangent, DistSq))
+                                {
+                                        if (DistSq < BestDistSq)
+                                        {
+                                                BestDistSq = DistSq;
+                                                BestPoint = CandidatePoint;
+                                                BestTangent = CandidateTangent;
+                                                bFound = true;
+                                        }
+                                }
+                        }
+
+                        if (!bFound)
+                        {
+                                for (const TArray<FVector>& Path : AllPaths)
+                                {
+                                        FVector CandidatePoint = FVector::ZeroVector;
+                                        FVector CandidateTangent = FVector::ZeroVector;
+                                        float DistSq = 0.f;
+                                        if (FindNearestPointOnPathDetailed(Target, Path, CandidatePoint, CandidateTangent, DistSq))
+                                        {
+                                                if (DistSq < BestDistSq)
+                                                {
+                                                        BestDistSq = DistSq;
+                                                        BestPoint = CandidatePoint;
+                                                        BestTangent = CandidateTangent;
+                                                        bFound = true;
+                                                }
+                                        }
+                                }
+                        }
+
+                        if (bFound)
+                        {
+                                OutPoint = BestPoint;
+                                OutTangent = BestTangent.GetSafeNormal();
+                                AvailableRoadPoints.Add(BestPoint);
+                        }
+
+                        return bFound;
+                };
+
+        // 1. Find the farthest exit from entry
+        int32 FarthestExitIdx = FirstExitIdx;
+        float MaxDist = 0.0f;
+        for (int32 i = FirstExitIdx; i <= LastExitIdx; ++i)
+        {
+                const float Dist = FVector::Dist(NodesWS[EntryIdx], NodesWS[i]);
+                if (Dist > MaxDist)
+                {
+                        MaxDist = Dist;
+                        FarthestExitIdx = i;
+                }
+        }
 
         // 2. Build main road from entry to farthest exit
         const float ExitOffset = 400.0f; // Offset distance before snapping to the exit portal
@@ -490,7 +600,6 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
 
         const FVector MainOffsetPoint = MakeExitApproachPoint(NodesWS[FarthestExitIdx], NodesWS[EntryIdx]);
 
-        // Build curved path to offset point
         TArray<FVector> MainPath;
         const float Scale = EdgeOffsetScale(PtsLocal[EntryIdx], PtsLocal[FarthestExitIdx], RoomHalfSize);
         MakeCurvedPath(NodesWS[EntryIdx], MainOffsetPoint,
@@ -501,30 +610,28 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
                 GenSettings->RoadBaselineCurvature * Scale,
                 Rng,
                 MainPath);
-
-        // Add final segment to actual exit
         MainPath.Add(NodesWS[FarthestExitIdx]);
 
-	AllPaths.Add(MainPath);
-	BuildOnePath(MainPath);
+        AllPaths.Add(MainPath);
+        SamplePathAndCache(MainPath);
 
-        // 3. Connect other exits to the main road
+        // 3. Connect other exits using the accumulated spline samples
         for (int32 i = FirstExitIdx; i <= LastExitIdx; ++i)
         {
-                if (i == FarthestExitIdx) continue; // Skip the one we already connected
-
-                FVector ConnectionPoint = FVector::ZeroVector;
-                FVector ConnectionTangent = FVector::ZeroVector;
-                float DummyDistSq = 0.f;
-                if (!FindNearestPointOnPathDetailed(NodesWS[i], MainPath, ConnectionPoint, ConnectionTangent, DummyDistSq))
+                if (i == FarthestExitIdx)
                 {
                         continue;
                 }
 
-                // Calculate offset point for this exit
+                FVector ConnectionPoint = FVector::ZeroVector;
+                FVector ConnectionTangent = FVector::ZeroVector;
+                if (!ResolveConnection(NodesWS[i], ConnectionPoint, ConnectionTangent))
+                {
+                        continue;
+                }
+
                 const FVector OffsetPointLocal = MakeExitApproachPoint(NodesWS[i], ConnectionPoint);
 
-                // Build path from connection point to offset point
                 TArray<FVector> ExitPath;
                 const FVector ConnectionPointLocal = GetActorTransform().InverseTransformPosition(ConnectionPoint);
                 const float ScaleLocal = EdgeOffsetScale(
@@ -533,122 +640,103 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
                         RoomHalfSize);
 
                 MakeCurvedPath(ConnectionPoint, OffsetPointLocal,
-                        FMath::Max(1, static_cast<int32>(GenSettings->RoadMidpointCount) / 2), // Fewer midpoints for branches
-                        GenSettings->RoadMaxPerpOffset * ScaleLocal * 0.7f, // Less deviation for branches
+                        FMath::Max(1, static_cast<int32>(GenSettings->RoadMidpointCount) / 2),
+                        GenSettings->RoadMaxPerpOffset * ScaleLocal * 0.7f,
                         GenSettings->RoadNoiseJitter * ScaleLocal * 0.7f,
                         GenSettings->RoadTangentStrength,
                         GenSettings->RoadBaselineCurvature * ScaleLocal * 0.7f,
                         Rng,
                         ExitPath);
 
-		// Add final segment to actual exit
-		ExitPath.Add(NodesWS[i]);
+                ExitPath.Add(NodesWS[i]);
 
-		AllPaths.Add(ExitPath);
-		BuildOnePath(ExitPath);
-	}
+                AllPaths.Add(ExitPath);
+                SamplePathAndCache(ExitPath);
+        }
 
-        // 4. Connect POIs to the nearest road
+        // 4. Connect POIs to the nearest available road points
         for (int32 i = FirstPOIIdx; i < NodesWS.Num(); ++i)
         {
-                // Find nearest point on any existing path
-                int32 BestPathIdx = -1;
-                float BestDistSq = FLT_MAX;
-                FVector BestConnectionPoint = FVector::ZeroVector;
-                FVector BestConnectionTangent = FVector::ZeroVector;
-
-                for (int32 PathIdx = 0; PathIdx < AllPaths.Num(); ++PathIdx)
+                FVector ConnectionPoint = FVector::ZeroVector;
+                FVector ConnectionTangent = FVector::ZeroVector;
+                if (!ResolveConnection(NodesWS[i], ConnectionPoint, ConnectionTangent))
                 {
-                        FVector CandidatePoint = FVector::ZeroVector;
-                        FVector CandidateTangent = FVector::ZeroVector;
-                        float DistSq = 0.f;
-                        if (FindNearestPointOnPathDetailed(NodesWS[i], AllPaths[PathIdx], CandidatePoint, CandidateTangent, DistSq)
-                                && DistSq < BestDistSq)
-                        {
-                                BestDistSq = DistSq;
-                                BestPathIdx = PathIdx;
-                                BestConnectionPoint = CandidatePoint;
-                                BestConnectionTangent = CandidateTangent;
-                        }
+                        continue;
                 }
 
-                if (BestPathIdx >= 0)
+                const FTransform ActorXf = GetActorTransform();
+                const FVector ConnectionPointLocal = ActorXf.InverseTransformPosition(ConnectionPoint);
+                const float ScalePOI = EdgeOffsetScale(
+                        FVector2f(ConnectionPointLocal.X, ConnectionPointLocal.Y),
+                        PtsLocal[i],
+                        RoomHalfSize);
+
+                FVector DirToPOI = NodesWS[i] - ConnectionPoint;
+                DirToPOI.Z = 0.f;
+
+                const float ToPOILength = FVector2D(DirToPOI.X, DirToPOI.Y).Size();
+                FVector DirToPOINorm = DirToPOI;
+                if (!DirToPOINorm.Normalize())
                 {
-                        // Build path from connection point to POI with a gentle side branch.
-                        const FTransform ActorXf = GetActorTransform();
-                        const FVector ConnectionPointLocal = ActorXf.InverseTransformPosition(BestConnectionPoint);
-                        const float ScalePOI = EdgeOffsetScale(
-                                FVector2f(ConnectionPointLocal.X, ConnectionPointLocal.Y),
-                                PtsLocal[i],
-                                RoomHalfSize);
+                        DirToPOINorm = FVector::ZeroVector;
+                }
 
-                        FVector DirToPOI = NodesWS[i] - BestConnectionPoint;
-                        DirToPOI.Z = 0.f;
-
-                        const float ToPOILength = FVector2D(DirToPOI.X, DirToPOI.Y).Size();
-                        FVector DirToPOINorm = DirToPOI;
-                        if (!DirToPOINorm.Normalize())
-                        {
-                                DirToPOINorm = FVector::ZeroVector;
-                        }
-
-                        FVector BranchDir = DirToPOINorm;
-                        FVector Tangent2D = FVector(BestConnectionTangent.X, BestConnectionTangent.Y, 0.f).GetSafeNormal();
-                        if (BranchDir.IsNearlyZero())
-                        {
-                                if (!Tangent2D.IsNearlyZero())
-                                {
-                                        BranchDir = FVector(-Tangent2D.Y, Tangent2D.X, 0.f);
-                                }
-                                else
-                                {
-                                        BranchDir = FVector::RightVector;
-                                }
-                        }
-
+                FVector BranchDir = DirToPOINorm;
+                FVector Tangent2D = FVector(ConnectionTangent.X, ConnectionTangent.Y, 0.f).GetSafeNormal();
+                if (BranchDir.IsNearlyZero())
+                {
                         if (!Tangent2D.IsNearlyZero())
                         {
-                                const float Alignment = FMath::Abs(FVector::DotProduct(BranchDir, Tangent2D));
-                                if (Alignment > 0.55f)
-                                {
-                                        BranchDir -= Tangent2D * FVector::DotProduct(BranchDir, Tangent2D);
-                                        if (!BranchDir.Normalize())
-                                        {
-                                                BranchDir = FVector(-Tangent2D.Y, Tangent2D.X, 0.f);
-                                        }
-                                }
-
-                                if (!DirToPOINorm.IsNearlyZero() && FVector::DotProduct(BranchDir, DirToPOINorm) < 0.f)
-                                {
-                                        BranchDir *= -1.f;
-                                }
+                                BranchDir = FVector(-Tangent2D.Y, Tangent2D.X, 0.f);
                         }
-
-                        if (!BranchDir.Normalize())
+                        else
                         {
                                 BranchDir = FVector::RightVector;
                         }
-
-                        const float KickBase = FMath::Clamp(ToPOILength * 0.35f, 200.f, 700.f);
-                        const float Kick = FMath::Max(180.f, KickBase * FMath::Max(0.35f, ScalePOI));
-                        FVector BranchStart = BestConnectionPoint + BranchDir * Kick;
-                        BranchStart = AdjustForObstacles(BranchStart);
-
-                        TArray<FVector> POIPath;
-                        MakeCurvedPath(BranchStart, NodesWS[i],
-                                FMath::Max(1, static_cast<int32>(GenSettings->RoadMidpointCount) / 3), // Even fewer midpoints for POI connections
-                                GenSettings->RoadMaxPerpOffset * ScalePOI * 0.5f, // Less deviation for POI branches
-                                GenSettings->RoadNoiseJitter * ScalePOI * 0.5f,
-                                GenSettings->RoadTangentStrength,
-                                GenSettings->RoadBaselineCurvature * ScalePOI * 0.5f,
-                                Rng,
-                                POIPath);
-
-                        POIPath.Insert(BestConnectionPoint, 0);
-
-                        AllPaths.Add(POIPath);
-                        BuildOnePath(POIPath);
                 }
+
+                if (!Tangent2D.IsNearlyZero())
+                {
+                        const float Alignment = FMath::Abs(FVector::DotProduct(BranchDir, Tangent2D));
+                        if (Alignment > 0.55f)
+                        {
+                                BranchDir -= Tangent2D * FVector::DotProduct(BranchDir, Tangent2D);
+                                if (!BranchDir.Normalize())
+                                {
+                                        BranchDir = FVector(-Tangent2D.Y, Tangent2D.X, 0.f);
+                                }
+                        }
+
+                        if (!DirToPOINorm.IsNearlyZero() && FVector::DotProduct(BranchDir, DirToPOINorm) < 0.f)
+                        {
+                                BranchDir *= -1.f;
+                        }
+                }
+
+                if (!BranchDir.Normalize())
+                {
+                        BranchDir = FVector::RightVector;
+                }
+
+                const float KickBase = FMath::Clamp(ToPOILength * 0.35f, 200.f, 700.f);
+                const float Kick = FMath::Max(180.f, KickBase * FMath::Max(0.35f, ScalePOI));
+                FVector BranchStart = ConnectionPoint + BranchDir * Kick;
+                BranchStart = AdjustForObstacles(BranchStart);
+
+                TArray<FVector> POIPath;
+                MakeCurvedPath(BranchStart, NodesWS[i],
+                        FMath::Max(1, static_cast<int32>(GenSettings->RoadMidpointCount) / 3),
+                        GenSettings->RoadMaxPerpOffset * ScalePOI * 0.5f,
+                        GenSettings->RoadNoiseJitter * ScalePOI * 0.5f,
+                        GenSettings->RoadTangentStrength,
+                        GenSettings->RoadBaselineCurvature * ScalePOI * 0.5f,
+                        Rng,
+                        POIPath);
+
+                POIPath.Insert(ConnectionPoint, 0);
+
+                AllPaths.Add(POIPath);
+                SamplePathAndCache(POIPath);
         }
 
         BuiltPaths = AllPaths;

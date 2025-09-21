@@ -27,7 +27,7 @@ protected:
 	UPROPERTY(VisibleAnywhere)
 	USceneComponent* Root;
 
-        void BuildOnePath(const TArray<FVector>& PathPointsWS);
+        void BuildOnePath(const TArray<FVector>& PathPointsWS, TArray<FVector>* OutSampledPoints = nullptr);
 
         bool FindNearestPointOnPath(const FVector& Point, const TArray<FVector>& Path, FVector& OutPoint, float& OutDistSq) const;
         bool FindNearestPointOnPathDetailed(const FVector& Point, const TArray<FVector>& Path, FVector& OutPoint, FVector& OutTangent,
@@ -57,6 +57,9 @@ protected:
         TArray<class USplineMeshComponent*> MeshSegments;
 
         void ClearMeshes();
+
+        // Cached dense points sampled from generated spline paths (world space).
+        TArray<FVector> CachedSplineSamples;
 
 public:
         // Returns minimal planar distance (XY) from the cached road polylines.
