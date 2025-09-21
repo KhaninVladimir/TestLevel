@@ -25,7 +25,11 @@ public:
 	UFUNCTION(BlueprintCallable, Category = "WorldGen")
 	ALocationRoom* CreateLocation(const UWorldGenSettings* Settings);
 
+	// Optional: keep reference to the last generated room
+	UPROPERTY(BlueprintReadOnly) 
+	TWeakObjectPtr<ALocationRoom> LastRoom;
+
 private:
 	UPROPERTY()
-	FRandomStream RndStream;
+	FRandomStream Rng;
 };

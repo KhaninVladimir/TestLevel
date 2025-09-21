@@ -1,87 +1,448 @@
-// Copyright notice placeholder
+﻿// Fill out your copyright notice in the Description page of Project Settings.
+
 
 #include "Generator/RoadSegment.h"
-
 #include "Components/SplineComponent.h"
 #include "Components/SplineMeshComponent.h"
-#include "Engine/StaticMesh.h"
+#include "Kismet/KismetMathLibrary.h"
 
 ARoadSegment::ARoadSegment()
 {
-
-        PrimaryActorTick.bCanEverTick = false;
-
-        Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
-        SetRootComponent(Root);
-
-        Spline = CreateDefaultSubobject<USplineComponent>(TEXT("Spline"));
-        Spline->SetupAttachment(RootComponent);
-        Spline->SetMobility(EComponentMobility::Movable);
-        Spline->bDrawDebug = false;
-
+	PrimaryActorTick.bCanEverTick = false;
+	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
+	SetRootComponent(Root);
 }
 
-void ARoadSegment::ResetSplineMeshes()
+void ARoadSegment::ClearNetwork()
 {
-
-        for (USplineMeshComponent* MeshComp : SplineMeshes)
-        {
-                if (MeshComp)
-                {
-                        MeshComp->DestroyComponent();
-                }
-        }
-        SplineMeshes.Reset();
-
+	// Destroy all spline/spline mesh components created earlier
+	TArray<UActorComponent*> Comps = GetComponents().Array();
+	for (UActorComponent* C : Comps)
+	{
+		if (C && (C->IsA<USplineComponent>() || C->IsA<USplineMeshComponent>()))
+		{
+			C->DestroyComponent();
+		}
+	}
 }
 
-void ARoadSegment::BuildFromPoints(const TArray<FVector>& Points, UStaticMesh* Mesh, const FVector2f& Scale)
+float ARoadSegment::ClearanceToRect(const FVector2f& P, const FVector2f& H)
 {
+	// minimal distance to inner rectangle border in local space
+	const float dx = H.X - FMath::Abs(P.X);
+	const float dy = H.Y - FMath::Abs(P.Y);
+	return FMath::Min(dx, dy);
+}
 
-        if (Points.Num() < 2 || !Mesh)
-        {
-                return;
-        }
+float ARoadSegment::EdgeOffsetScale(const FVector2f& A_L, const FVector2f& B_L, const FVector2f& H)
+{
+	const float m = FMath::Min(ClearanceToRect(A_L, H), ClearanceToRect(B_L, H));
+	const float mRef = 0.5f * FMath::Min(H.X, H.Y);
+	float Scale = FMath::Clamp(m / FMath::Max(1.f, mRef), 0.25f, 1.0f);
+	return Scale;
+}
 
-        ResetSplineMeshes();
+void ARoadSegment::ComputeMST_Prim(const TArray<FVector2f>& PtsLocal, TArray<FIntPoint>& OutEdges)
+{
+	OutEdges.Reset();
+	const int32 N = PtsLocal.Num();
+	if (N <= 1) return;
 
-        SetActorLocation(Points[0]);
-        TArray<FVector> LocalPoints;
-        LocalPoints.Reserve(Points.Num());
-        LocalPoints.Add(FVector::ZeroVector);
-        for (int32 Index = 1; Index < Points.Num(); ++Index)
-        {
-                LocalPoints.Add(Points[Index] - Points[0]);
-        }
+	TArray<float> Best;   Best.Init(FLT_MAX, N);
+	TArray<int32> Par;    Par.Init(-1, N);
+	TArray<uint8> In;     In.Init(0, N);
 
-        Spline->ClearSplinePoints(false);
-        for (const FVector& Point : LocalPoints)
-        {
-                Spline->AddSplinePoint(Point, ESplineCoordinateSpace::Local, false);
-        }
-        Spline->UpdateSpline();
+	auto Dist2 = [&](int32 i, int32 j)->float
+		{
+			const FVector2f d = PtsLocal[i] - PtsLocal[j];
+			return d.X * d.X + d.Y * d.Y;
+		};
 
-        for (int32 PointIndex = 0; PointIndex + 1 < Spline->GetNumberOfSplinePoints(); ++PointIndex)
-        {
-                USplineMeshComponent* MeshComp = NewObject<USplineMeshComponent>(this);
-                MeshComp->SetMobility(EComponentMobility::Movable);
-                MeshComp->SetStaticMesh(Mesh);
-                MeshComp->SetForwardAxis(ESplineMeshAxis::X, true);
-                MeshComp->SetCollisionEnabled(ECollisionEnabled::NoCollision);
+	Best[0] = 0.f; // entrance root
+	for (int32 it = 0; it < N; ++it)
+	{
+		int32 u = -1; float bu = FLT_MAX;
+		for (int32 i = 0; i < N; ++i)
+			if (!In[i] && Best[i] < bu) { bu = Best[i]; u = i; }
+		if (u < 0) break;
+		In[u] = 1;
 
-                MeshComp->AttachToComponent(Spline, FAttachmentTransformRules::KeepRelativeTransform);
-                MeshComp->RegisterComponent();
-                SplineMeshes.Add(MeshComp);
+		for (int32 v = 0; v < N; ++v)
+		{
+			if (In[v] || v == u) continue;
+			const float w = Dist2(u, v);
+			if (w < Best[v]) { Best[v] = w; Par[v] = u; }
+		}
+	}
 
-                FVector StartPos, StartTangent;
-                FVector EndPos, EndTangent;
-                Spline->GetLocationAndTangentAtSplinePoint(PointIndex, StartPos, StartTangent, ESplineCoordinateSpace::Local);
-                Spline->GetLocationAndTangentAtSplinePoint(PointIndex + 1, EndPos, EndTangent, ESplineCoordinateSpace::Local);
+	for (int32 v = 1; v < N; ++v)
+		if (Par[v] >= 0) OutEdges.Add(FIntPoint(Par[v], v));
+}
 
-                MeshComp->SetStartAndEnd(StartPos, StartTangent, EndPos, EndTangent);
-                const FVector2D MeshScale(Scale.X, Scale.Y);
-                MeshComp->SetStartScale(MeshScale);
-                MeshComp->SetEndScale(MeshScale);
-        }
+void ARoadSegment::MaybeAddShortcuts(const TArray<FVector2f>& PtsLocal, const FVector2f& H, TArray<FIntPoint>& InOutEdges)
+{
+	const float ShortCutMax = 0.6f * FMath::Max(H.X, H.Y); // uu
 
+	auto HasEdge = [&](int32 a, int32 b)->bool
+		{
+			for (const FIntPoint& e : InOutEdges)
+				if ((e.X == a && e.Y == b) || (e.X == b && e.Y == a)) return true;
+			return false;
+		};
+
+	const int32 N = PtsLocal.Num();
+	for (int32 i = 1; i < N; ++i)
+	{
+		// nearest j
+		int32 jBest = -1; float dBest = FLT_MAX;
+		for (int32 j = 0; j < N; ++j)
+		{
+			if (j == i) continue;
+			const float d = FVector2D::Distance(FVector2D(PtsLocal[i]), FVector2D(PtsLocal[j]));
+			if (d < dBest) { dBest = d; jBest = j; }
+		}
+		if (jBest >= 0 && dBest < ShortCutMax && !HasEdge(i, jBest))
+		{
+			InOutEdges.Add(FIntPoint(i, jBest));
+		}
+	}
+}
+
+void ARoadSegment::MakeCurvedPath(const FVector& A, const FVector& B,
+	int32 MidCount,
+	float MaxPerp,
+	float NoiseJitter,
+	float TangentStrength,
+	FRandomStream& Rng,
+	TArray<FVector>& OutPoints)
+{
+	OutPoints.Reset();
+	OutPoints.Add(A);
+
+	const FVector AB = B - A;
+	const float   Len = FMath::Max(1.f, AB.Size());
+	const FVector Dir = AB / Len;
+	// 2D perp in XY plane (top-down feel). If you want full 3D, build an orthonormal basis.
+	const FVector Perp = FVector(-Dir.Y, Dir.X, 0.f).GetSafeNormal();
+
+	for (int32 i = 1; i <= MidCount; ++i)
+	{
+		const float t = static_cast<float>(i) / (MidCount + 1);
+		const FVector Base = A + Dir * (t * Len);
+
+		// Alternate left/right with decreasing amplitude towards ends
+		const float edgeFalloff = FMath::Sin(PI * t);         // 0..1..0
+		const float sign = (i % 2 == 0) ? -1.f : +1.f;
+		const float jitter = Rng.FRandRange(-NoiseJitter, +NoiseJitter);
+
+		const FVector Offset = Perp * (sign * MaxPerp * edgeFalloff) + FVector::UpVector * 0.f;
+		OutPoints.Add(Base + Offset + Dir * jitter * 0.1f);
+	}
+
+	OutPoints.Add(B);
+
+	// (Tangents are set when we build spline meshes from these points)
+}
+
+void ARoadSegment::BuildOnePath(const TArray<FVector>& PathPointsWS)
+{
+	if (!GenSettings || !GenSettings->RoadSplineMesh || PathPointsWS.Num() < 2) return;
+
+	// --- 1) Densify the input polyline so the spline has enough control points ---
+	TArray<FVector> DensePts;
+	DensePts.Reserve(PathPointsWS.Num() * 4);
+	DensePts.Add(PathPointsWS[0]);
+
+	// Approx mesh length along X; use it to choose target spacing between spline points
+	const FBoxSphereBounds MeshBounds = GenSettings->RoadSplineMesh->GetBounds();
+	const float MeshLenApprox = FMath::Max(150.f, 2.f * MeshBounds.BoxExtent.X);
+	const float TargetSpacing = FMath::Clamp(MeshLenApprox * 0.5f, 120.f, 600.f); // more points → smoother
+	const int32 MaxSubdivPerSeg = 32;
+
+	for (int32 i = 0; i < PathPointsWS.Num() - 1; ++i)
+	{
+		const FVector A = PathPointsWS[i];
+		const FVector B = PathPointsWS[i + 1];
+
+		const float segLen = FVector::Dist2D(A, B);
+		const int32 steps = FMath::Clamp(FMath::CeilToInt(segLen / TargetSpacing), 1, MaxSubdivPerSeg);
+
+		for (int32 s = 1; s <= steps; ++s)
+		{
+			const float t = static_cast<float>(s) / static_cast<float>(steps);
+			DensePts.Add(FMath::Lerp(A, B, t));
+		}
+	}
+
+	// --- 2) Create the spline and feed dense points as WORLD points, make them curved ---
+	USplineComponent* Spline = NewObject<USplineComponent>(this, USplineComponent::StaticClass(), NAME_None, RF_Transactional);
+	Spline->SetMobility(EComponentMobility::Movable);
+	Spline->SetupAttachment(Root);
+	Spline->RegisterComponent();
+
+	Spline->ClearSplinePoints(false);
+	for (int32 i = 0; i < DensePts.Num(); ++i)
+	{
+		Spline->AddSplinePoint(DensePts[i], ESplineCoordinateSpace::World, false);
+		Spline->SetSplinePointType(i, ESplinePointType::Curve, false); // smooth interpolation
+	}
+
+	// --- 3) Provide Catmull-Rom style tangents so neighbor segments join smoothly ---
+	auto TangentFor = [&](int32 idx)->FVector
+		{
+			if (idx <= 0)              return (DensePts[1] - DensePts[0]);
+			if (idx >= DensePts.Num() - 1) return (DensePts.Last() - DensePts[DensePts.Num() - 2]);
+			return 0.5f * (DensePts[idx + 1] - DensePts[idx - 1]);
+		};
+
+	const float TangentScale = FMath::Max(1.f, GenSettings->RoadTangentStrength);
+	for (int32 i = 0; i < DensePts.Num(); ++i)
+	{
+		const FVector T = TangentFor(i).GetSafeNormal() * TangentScale;
+		// Same arrive/leave keeps it smooth enough for a "trail"; feel free to bias if needed.
+		Spline->SetTangentsAtSplinePoint(i, T, T, ESplineCoordinateSpace::World);
+	}
+
+	Spline->SetClosedLoop(false, false);
+	Spline->UpdateSpline();
+
+	// --- 4) Lay spline meshes uniformly along the spline arc-length (continuous, no gaps) ---
+	const float PathLen = Spline->GetSplineLength();
+	const int32 NumSegments = FMath::Max(1, FMath::RoundToInt(PathLen / MeshLenApprox));
+	const float Step = PathLen / static_cast<float>(NumSegments);
+
+	for (int32 s = 0; s < NumSegments; ++s)
+	{
+		const float D0 = s * Step;
+		const float D1 = (s + 1) * Step;
+
+		// Use WORLD space here because we sampled the spline in world and will keep world transforms on SMC
+		const FVector StartPos = Spline->GetLocationAtDistanceAlongSpline(D0, ESplineCoordinateSpace::World);
+		const FVector EndPos = Spline->GetLocationAtDistanceAlongSpline(D1, ESplineCoordinateSpace::World);
+		FVector StartTangent = Spline->GetTangentAtDistanceAlongSpline(D0, ESplineCoordinateSpace::World);
+		FVector EndTangent = Spline->GetTangentAtDistanceAlongSpline(D1, ESplineCoordinateSpace::World);
+
+		// Normalize tangent magnitude to local segment size, then scale by user strength
+		const float LocalLen = FVector::Dist2D(StartPos, EndPos);
+		const float SafeLen = FMath::Max(LocalLen, 1.f);
+		StartTangent = StartTangent.GetSafeNormal() * SafeLen * 0.5f;
+		EndTangent = EndTangent.GetSafeNormal() * SafeLen * 0.5f;
+
+		StartTangent *= TangentScale;
+		EndTangent *= TangentScale;
+
+		USplineMeshComponent* SMC = NewObject<USplineMeshComponent>(this, USplineMeshComponent::StaticClass(), NAME_None, RF_Transactional);
+		SMC->SetMobility(EComponentMobility::Movable);
+		SMC->SetStaticMesh(GenSettings->RoadSplineMesh);
+		SMC->SetForwardAxis(ESplineMeshAxis::X, false);
+
+		// Keep WORLD so we can pass world positions/tangents directly
+		SMC->AttachToComponent(Spline, FAttachmentTransformRules::KeepWorldTransform);
+		SMC->RegisterComponent();
+
+		SMC->SetStartAndEnd(StartPos, StartTangent, EndPos, EndTangent, true);
+		SMC->SetStartScale(FVector2D(1.f, 1.f));
+		SMC->SetEndScale(FVector2D(1.f, 1.f));
+		SMC->SetStartRoll(0.f);
+		SMC->SetEndRoll(0.f);
+	}
+}
+
+int32 ARoadSegment::FindNearestPointOnPath(const FVector& Point, const TArray<FVector>& Path)
+{
+	int32 BestIdx = -1;
+	float BestDist = FLT_MAX;
+
+	for (int32 i = 0; i < Path.Num() - 1; ++i)
+	{
+		// Find closest point on segment
+		const FVector A = Path[i];
+		const FVector B = Path[i + 1];
+		const FVector AB = B - A;
+		const float ABLen = AB.Size();
+
+		if (ABLen < 0.01f) continue;
+
+		const FVector ABNorm = AB / ABLen;
+		const float t = FMath::Clamp(FVector::DotProduct(Point - A, ABNorm) / ABLen, 0.0f, 1.0f);
+		const FVector ClosestPoint = A + AB * t;
+		const float Dist = FVector::Dist(Point, ClosestPoint);
+
+		if (Dist < BestDist)
+		{
+			BestDist = Dist;
+			BestIdx = i;
+		}
+	}
+
+	return BestIdx;
+}
+
+void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount, const FVector2f& RoomHalfSize, const UWorldGenSettings* Settings, FRandomStream& Rng)
+{
+	if (NodesWS.Num() <= 1 || !Settings || ExitCount < 1) return;
+
+	GenSettings = Settings;
+
+	// Clean old paths
+	ClearNetwork();
+
+	// Validate indices
+	const int32 EntryIdx = 0;
+	const int32 FirstExitIdx = 1;
+	const int32 LastExitIdx = ExitCount; // Inclusive
+	const int32 FirstPOIIdx = ExitCount + 1;
+
+	if (LastExitIdx >= NodesWS.Num()) return; // Not enough nodes
+
+	// Convert nodes to actor-local 2D (room space) for topology
+	TArray<FVector2f> PtsLocal;
+	PtsLocal.Reserve(NodesWS.Num());
+	for (const FVector& P : NodesWS)
+	{
+		const FVector L = GetActorTransform().InverseTransformPosition(P);
+		PtsLocal.Add(FVector2f(L.X, L.Y));
+	}
+
+	// Storage for all paths
+	TArray<TArray<FVector>> AllPaths;
+
+	// 1. Find the farthest exit from entry
+	int32 FarthestExitIdx = FirstExitIdx;
+	float MaxDist = 0.0f;
+	for (int32 i = FirstExitIdx; i <= LastExitIdx; ++i)
+	{
+		float Dist = FVector::Dist(NodesWS[EntryIdx], NodesWS[i]);
+		if (Dist > MaxDist)
+		{
+			MaxDist = Dist;
+			FarthestExitIdx = i;
+		}
+	}
+
+	// 2. Build main road from entry to farthest exit
+	// For exits, we offset the approach point
+	const float ExitOffset = 400.0f; // N units offset from exit
+
+	// Calculate offset point for the farthest exit
+	FVector ExitDir = NodesWS[FarthestExitIdx] - NodesWS[EntryIdx];
+	ExitDir.Z = 0; // Keep it horizontal
+	ExitDir.Normalize();
+	FVector OffsetPoint = NodesWS[FarthestExitIdx] - ExitDir * ExitOffset;
+
+	// Build curved path to offset point
+	TArray<FVector> MainPath;
+	const float Scale = EdgeOffsetScale(PtsLocal[EntryIdx], PtsLocal[FarthestExitIdx], RoomHalfSize);
+	MakeCurvedPath(NodesWS[EntryIdx], OffsetPoint,
+		static_cast<int32>(GenSettings->RoadMidpointCount),
+		GenSettings->RoadMaxPerpOffset * Scale,
+		GenSettings->RoadNoiseJitter * Scale,
+		GenSettings->RoadTangentStrength,
+		Rng,
+		MainPath);
+
+	// Add final segment to actual exit
+	MainPath.Add(NodesWS[FarthestExitIdx]);
+
+	AllPaths.Add(MainPath);
+	BuildOnePath(MainPath);
+
+	// 3. Connect other exits to the main road
+	for (int32 i = FirstExitIdx; i <= LastExitIdx; ++i)
+	{
+		if (i == FarthestExitIdx) continue; // Skip the one we already connected
+
+		// Find nearest point on main road
+		int32 NearestIdx = FindNearestPointOnPath(NodesWS[i], MainPath);
+		if (NearestIdx < 0) continue;
+
+		FVector ConnectionPoint = MainPath[NearestIdx];
+
+		// Calculate offset point for this exit
+		FVector ExitDirLocal = NodesWS[i] - ConnectionPoint;
+		ExitDirLocal.Z = 0;
+		ExitDirLocal.Normalize();
+		FVector OffsetPointLocal = NodesWS[i] - ExitDirLocal * ExitOffset;
+
+		// Build path from connection point to offset point
+		TArray<FVector> ExitPath;
+		const float ScaleLocal = EdgeOffsetScale(
+			FVector2f(ConnectionPoint.X, ConnectionPoint.Y),
+			PtsLocal[i],
+			RoomHalfSize);
+
+		MakeCurvedPath(ConnectionPoint, OffsetPointLocal,
+			FMath::Max(1, static_cast<int32>(GenSettings->RoadMidpointCount) / 2), // Fewer midpoints for branches
+			GenSettings->RoadMaxPerpOffset * ScaleLocal * 0.7f, // Less deviation for branches
+			GenSettings->RoadNoiseJitter * ScaleLocal * 0.7f,
+			GenSettings->RoadTangentStrength,
+			Rng,
+			ExitPath);
+
+		// Add final segment to actual exit
+		ExitPath.Add(NodesWS[i]);
+
+		AllPaths.Add(ExitPath);
+		BuildOnePath(ExitPath);
+	}
+
+	// 4. Connect POIs to the nearest road
+	for (int32 i = FirstPOIIdx; i < NodesWS.Num(); ++i)
+	{
+		// Find nearest point on any existing path
+		int32 BestPathIdx = -1;
+		int32 BestSegmentIdx = -1;
+		float BestDist = FLT_MAX;
+		FVector BestConnectionPoint;
+
+		for (int32 PathIdx = 0; PathIdx < AllPaths.Num(); ++PathIdx)
+		{
+			int32 SegIdx = FindNearestPointOnPath(NodesWS[i], AllPaths[PathIdx]);
+			if (SegIdx >= 0)
+			{
+				// Calculate actual closest point on segment
+				const FVector& A = AllPaths[PathIdx][SegIdx];
+				const FVector& B = AllPaths[PathIdx][FMath::Min(SegIdx + 1, AllPaths[PathIdx].Num() - 1)];
+				const FVector AB = B - A;
+				const float ABLen = AB.Size();
+
+				if (ABLen > 0.01f)
+				{
+					const FVector ABNorm = AB / ABLen;
+					const float t = FMath::Clamp(FVector::DotProduct(NodesWS[i] - A, ABNorm) / ABLen, 0.0f, 1.0f);
+					const FVector ClosestPoint = A + AB * t;
+					const float Dist = FVector::Dist(NodesWS[i], ClosestPoint);
+
+					if (Dist < BestDist)
+					{
+						BestDist = Dist;
+						BestPathIdx = PathIdx;
+						BestSegmentIdx = SegIdx;
+						BestConnectionPoint = ClosestPoint;
+					}
+				}
+			}
+		}
+
+		if (BestPathIdx >= 0)
+		{
+			// Build path from connection point to POI
+			TArray<FVector> POIPath;
+			const float ScalePOI = EdgeOffsetScale(
+				FVector2f(BestConnectionPoint.X, BestConnectionPoint.Y),
+				PtsLocal[i],
+				RoomHalfSize);
+
+			MakeCurvedPath(BestConnectionPoint, NodesWS[i],
+				FMath::Max(1, static_cast<int32>(GenSettings->RoadMidpointCount) / 3), // Even fewer midpoints for POI connections
+				GenSettings->RoadMaxPerpOffset * ScalePOI * 0.5f, // Less deviation for POI branches
+				GenSettings->RoadNoiseJitter * ScalePOI * 0.5f,
+				GenSettings->RoadTangentStrength,
+				Rng,
+				POIPath);
+
+			AllPaths.Add(POIPath);
+			BuildOnePath(POIPath);
+		}
+	}
 }

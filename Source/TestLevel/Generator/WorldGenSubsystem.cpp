@@ -15,7 +15,7 @@ ALocationRoom* UWorldGenSubsystem::CreateLocation(const UWorldGenSettings* Setti
 	if (!W) return nullptr;
 
 	int32 Seed = Settings->Seed == 0 ? FMath::RandRange(0, 65000) : Settings->Seed;
-	RndStream.Initialize(Seed);
+	Rng.Initialize(Seed);
 
 	if (Settings->Seed == 0)
 	{
@@ -43,6 +43,7 @@ ALocationRoom* UWorldGenSubsystem::CreateLocation(const UWorldGenSettings* Setti
 	UGameplayStatics::FinishSpawningActor(Room, RoomXform);
 
 	// Generate content
-        Room->Generate(Settings, RndStream, Start);
-        return Room;
+	Room->Generate(Settings, Start, Rng);
+	LastRoom = Room;
+	return Room;
 }

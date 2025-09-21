@@ -23,28 +23,62 @@ class UInstancedStaticMeshComponent;
 UCLASS(Blueprintable)
 class TESTLEVEL_API ALocationRoom : public AActor
 {
-	GENERATED_BODY()
+    GENERATED_BODY()
 public:
-       ALocationRoom();
+	ALocationRoom();
 
-
-        // Entry point to generate everything.
-        UFUNCTION(BlueprintCallable, Category = "WorldGen")
-        void Generate(const UWorldGenSettings* Settings, FRandomStream RndStream, AWorldStartMarker* StartMarker);
-
+	// Entry point to generate everything.
+	UFUNCTION(BlueprintCallable, Category = "WorldGen")
+	void Generate(const UWorldGenSettings* Settings, AWorldStartMarker* EntranceMarker, FRandomStream RndStream);
 
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)
 	USceneComponent* Root;
 
 	// Visual walls as segments; could be HISM for efficiency if desired.
-	UPROPERTY(VisibleAnywhere)
+	UPROPERTY(VisibleAnywhere) 
 	UInstancedStaticMeshComponent* WallISM;
 
 	// Cached for convenience
-	UPROPERTY()
+	UPROPERTY() 
 	const UWorldGenSettings* GenSettings = nullptr;
-	UPROPERTY()
-	FRandomStream RndStream;
+	UPROPERTY() 
+	FRandomStream Rng;
 
+	// Geometry helpers
+	FVector2f GetHalfSize() const;
+	FVector SideOriginWorld(ERoomSide Side) const;
+	FVector SideDirection(ERoomSide Side) const;
+	FVector LocalOut(ERoomSide) const;
+	bool IsInsideRoom(const FVector& P) const;
+	bool SatisfiesMinDist(const FVector& P, const TArray<FVector>& Points, float MinDist) const;
+
+
+	// Steps
+	// Choose the wall side using marker's forward vector (designer controls the entrance side).
+	ERoomSide GuessEntranceSideFromMarker(const class AWorldStartMarker* Marker) const;
+
+	void BuildWallsWithOpenings(const FDoorwaySpec& Entrance);
+	void SpawnFinishMarkers(TArray<AWorldFinishMarker*>& OutMarkers);
+	void SpawnPOIs(const FVector& EntranceWorld, TArray<AActor*>& OutPOIs);
+	void SpawnMonsters(TArray<AActor*>& OutMonsters);
+	void SpawnRoads();
+
+	FORCEINLINE FVector GetRoomCenter() const;
+	FORCEINLINE FTransform GetRoomTransform() const;
+	FORCEINLINE FVector WorldToRoomLocal(const FVector& P) const;
+	FORCEINLINE FVector RoomLocalToWorld(const FVector& L) const;
+
+private:
+	UPROPERTY(Transient)
+	TArray<FDoorwaySpec> Exits;
+
+	UPROPERTY(Transient)
+	TArray<FVector> RoadPoint;
+
+	UPROPERTY(Transient)
+	TArray<AActor*> POIs;
+
+	UPROPERTY(Transient)
+	FVector RoomCenter = FVector::ZeroVector;
 };
