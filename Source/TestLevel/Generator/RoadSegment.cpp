@@ -144,7 +144,7 @@ void ARoadSegment::MakeCurvedPath(const FVector& A, const FVector& B,
                 const float tRaw = static_cast<float>(i) / (MidCount + 1);
                 const FVector Base = A + Dir * (tRaw * Len);
 
-                const float SmoothT = FMath::InterpEaseInOut(0.f, 1.f, tRaw);
+                const float SmoothT = FMath::InterpEaseInOut(0.f, 1.f, tRaw, 2.f);
                 const float EdgeFalloff = FMath::Sin(PI * SmoothT); // 0..1..0
 
                 const float BaselineOffset = BaseSign * BaseAmplitude * EdgeFalloff;
@@ -236,9 +236,14 @@ void ARoadSegment::BuildPOIBranchPath(const FVector& ConnectionPoint,
         {
                 RoadDir = Forward;
         }
-        else if (FVector::DotProduct(RoadDir, Forward) < 0.15f)
+        else
         {
-                RoadDir = Forward;
+                const float Alignment = FMath::Clamp(FVector::DotProduct(RoadDir, Forward), 0.f, 1.f);
+                RoadDir = (Forward + RoadDir * Alignment * 0.5f).GetSafeNormal();
+                if (RoadDir.IsNearlyZero())
+                {
+                        RoadDir = Forward;
+                }
         }
 
         const float BranchScale = FMath::Clamp(ScalePOI, 0.25f, 1.25f);
@@ -847,29 +852,94 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
         // 4. Connect POIs to the nearest road
         for (int32 i = FirstPOIIdx; i < NodesWS.Num(); ++i)
         {
+                const FVector PoiLocation = NodesWS[i];
+
                 // Find nearest point on any existing path
                 int32 BestPathIdx = -1;
                 float BestDistSq = FLT_MAX;
                 FVector BestConnectionPoint = FVector::ZeroVector;
                 FVector BestConnectionTangent = FVector::ZeroVector;
+                int32 BestConnectionSegment = INDEX_NONE;
+                float BestConnectionParam = 0.f;
 
                 for (int32 PathIdx = 0; PathIdx < AllPaths.Num(); ++PathIdx)
                 {
                         FVector CandidatePoint = FVector::ZeroVector;
                         FVector CandidateTangent = FVector::ZeroVector;
                         float DistSq = 0.f;
-                        if (FindNearestPointOnPathDetailed(NodesWS[i], AllPaths[PathIdx], CandidatePoint, CandidateTangent, DistSq)
+                        int32 SegmentIdx = INDEX_NONE;
+                        float SegmentParam = 0.f;
+                        if (FindNearestPointOnPathDetailed(PoiLocation,
+                                AllPaths[PathIdx],
+                                CandidatePoint,
+                                CandidateTangent,
+                                DistSq,
+                                &SegmentIdx,
+                                &SegmentParam)
                                 && DistSq < BestDistSq)
                         {
                                 BestDistSq = DistSq;
                                 BestPathIdx = PathIdx;
                                 BestConnectionPoint = CandidatePoint;
                                 BestConnectionTangent = CandidateTangent;
+                                BestConnectionSegment = SegmentIdx;
+                                BestConnectionParam = SegmentParam;
                         }
                 }
 
                 if (BestPathIdx >= 0)
                 {
+                        const float EndpointBias = 0.12f;
+                        bool bConnectionNearEndpoint = (BestConnectionSegment == INDEX_NONE)
+                                || (BestConnectionParam <= EndpointBias)
+                                || (BestConnectionParam >= 1.f - EndpointBias);
+
+                        if (bConnectionNearEndpoint)
+                        {
+                                const TArray<FVector>& PathPts = AllPaths[BestPathIdx];
+                                float BestInteriorDistSq = FLT_MAX;
+                                FVector BestInteriorPoint = BestConnectionPoint;
+                                FVector BestInteriorTangent = BestConnectionTangent;
+                                bool bFoundInterior = false;
+
+                                for (int32 SegmentIdx = 0; SegmentIdx < PathPts.Num() - 1; ++SegmentIdx)
+                                {
+                                        const FVector A = PathPts[SegmentIdx];
+                                        const FVector B = PathPts[SegmentIdx + 1];
+                                        const FVector AB = B - A;
+                                        const float LenSq = AB.SizeSquared();
+                                        if (LenSq <= KINDA_SMALL_NUMBER)
+                                        {
+                                                continue;
+                                        }
+
+                                        const float RawT = FVector::DotProduct(PoiLocation - A, AB) / LenSq;
+                                        const float ClampedT = FMath::Clamp(RawT, EndpointBias, 1.f - EndpointBias);
+                                        if (ClampedT <= EndpointBias || ClampedT >= 1.f - EndpointBias)
+                                        {
+                                                continue;
+                                        }
+
+                                        const FVector Candidate = A + AB * ClampedT;
+                                        const float DistSq = FVector::DistSquared(PoiLocation, Candidate);
+                                        if (!bFoundInterior || DistSq < BestInteriorDistSq)
+                                        {
+                                                BestInteriorDistSq = DistSq;
+                                                BestInteriorPoint = Candidate;
+                                                BestInteriorTangent = AB.GetSafeNormal();
+                                                bFoundInterior = true;
+                                        }
+                                }
+
+                                if (bFoundInterior && BestInteriorDistSq <= BestDistSq * 1.15f)
+                                {
+                                        BestConnectionPoint = BestInteriorPoint;
+                                        BestConnectionTangent = BestInteriorTangent;
+                                        BestDistSq = BestInteriorDistSq;
+                                        bConnectionNearEndpoint = false;
+                                }
+                        }
+
                         // Build path from connection point to POI with a gentle side branch.
                         const FTransform ActorXf = GetActorTransform();
                         const FVector ConnectionPointLocal = ActorXf.InverseTransformPosition(BestConnectionPoint);
@@ -881,7 +951,7 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
                         TArray<FVector> POIPath;
                         BuildPOIBranchPath(BestConnectionPoint,
                                 BestConnectionTangent,
-                                NodesWS[i],
+                                PoiLocation,
                                 ScalePOI,
                                 Rng,
                                 POIPath);
