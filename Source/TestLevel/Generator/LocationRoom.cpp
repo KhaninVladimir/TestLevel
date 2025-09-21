@@ -121,37 +121,45 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 	GenSettings = Settings;
 	Rng = RndStream;
 
-	// Align room transform with the provided marker.
+	// Align room transform with the provided marker so that the actor's transform becomes
+	// the authoritative entry transform for the whole location (designers rotate the actor).
 	SetActorTransform(EntranceMarker->GetActorTransform());
 
 	// Room transform (rotation-aware math)
-	const FQuat RoomQ = GetActorTransform().GetRotation();
+	const FTransform EntryTransform = GetActorTransform();
+	const FQuat RoomQ = EntryTransform.GetRotation();
 
 	// --- 0) Inputs ---
-	EntranceLocation = EntranceMarker->GetActorLocation();
+	EntranceLocation = EntryTransform.GetLocation();
 	const FVector EntranceWorld = EntranceLocation;
-	const FVector MarkerFwdWorld = EntranceMarker->GetActorForwardVector();
-	//const FVector MarkerFwdLocal = RoomQ.UnrotateVector(MarkerFwdWorld); // marker forward in room-local	
+	const FVector EntryForwardWorld = EntryTransform.GetRotation().GetForwardVector();
+	const FVector EntryForwardLocal = RoomQ.UnrotateVector(EntryForwardWorld);
 
-	// If marker's arrow points INSIDE the room, flip to get OUTWARD normal direction.
-	const FVector2D F2 = FVector2D(-MarkerFwdWorld.X, -MarkerFwdWorld.Y);
+	// If actor's forward points INSIDE the room, flip to get OUTWARD normal direction in local space.
+	FVector2D OutwardLocal2D(-EntryForwardLocal.X, -EntryForwardLocal.Y);
 
-	// --- 1) Pick entrance wall STRICTLY by marker direction (dominant axis in room-local) ---
-	ERoomSide EntranceSide;
-	if (FMath::Abs(F2.X) >= FMath::Abs(F2.Y))
+	if (OutwardLocal2D.IsNearlyZero())
 	{
-		EntranceSide = (F2.X >= 0.f) ? ERoomSide::East : ERoomSide::West;
+		// Degenerate case — default to pointing north.
+		OutwardLocal2D = FVector2D(0.f, 1.f);
+	}
+
+	// --- 1) Pick entrance wall strictly by actor direction (dominant axis in room-local) ---
+	ERoomSide EntranceSide;
+	if (FMath::Abs(OutwardLocal2D.X) >= FMath::Abs(OutwardLocal2D.Y))
+	{
+		EntranceSide = (OutwardLocal2D.X >= 0.f) ? ERoomSide::East : ERoomSide::West;
 	}
 	else
 	{
-		EntranceSide = (F2.Y >= 0.f) ? ERoomSide::North : ERoomSide::South;
+		EntranceSide = (OutwardLocal2D.Y >= 0.f) ? ERoomSide::North : ERoomSide::South;
 	}
 
 	// --- 2) Entrance spec aligned with final geometry ---
 	FDoorwaySpec Entrance;
 	Entrance.Side = EntranceSide;
 	Entrance.HalfWidth = GenSettings->DoorwayHalfWidth;
-	Entrance.WorldTransform = EntranceMarker->GetActorTransform();
+	Entrance.WorldTransform = EntryTransform;
 
         const FVector OutWS = RoomQ.RotateVector(LocalOut(Entrance.Side)).GetSafeNormal();
         const FVector AlongWS = SideDirectionWorld(Entrance.Side).GetSafeNormal();
