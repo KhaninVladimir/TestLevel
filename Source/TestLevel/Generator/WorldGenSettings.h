@@ -57,15 +57,6 @@ public:
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
 	float RoadTangentStrength = 800.f;
 	
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
-	FVector2f RoadMargin = FVector2f(100.f, 100.f);
-	
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
-	float RoadExitApproachOffset = 100.f;
-
-	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "Road")
-	float RoadExtraClearanceUU = 100.f;
-
 	// --- POI ---
 	UPROPERTY(EditAnywhere, BlueprintReadOnly, Category = "POI")
 	float POISpawnChance = 0.35f;
