@@ -30,6 +30,8 @@ protected:
         void BuildOnePath(const TArray<FVector>& PathPointsWS);
 
         bool FindNearestPointOnPath(const FVector& Point, const TArray<FVector>& Path, FVector& OutPoint, float& OutDistSq) const;
+        bool FindNearestPointOnPathDetailed(const FVector& Point, const TArray<FVector>& Path, FVector& OutPoint, FVector& OutTangent,
+                float& OutDistSq, int32* OutSegmentIdx = nullptr, float* OutSegmentT = nullptr) const;
 
 	// Utility used by BuildNetwork
 	void ComputeMST_Prim(const TArray<FVector2f>& PtsLocal, TArray<FIntPoint>& OutEdges);
