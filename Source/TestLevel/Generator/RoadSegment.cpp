@@ -218,17 +218,17 @@ void ARoadSegment::BuildPOIBranchPath(const FVector& ConnectionPoint,
         OutPoints.Reset();
         OutPoints.Add(ConnectionPoint);
 
-        FVector DirToPOI = POILocation - ConnectionPoint;
-        DirToPOI.Z = 0.f;
+        FVector ToPOI = POILocation - ConnectionPoint;
+        ToPOI.Z = 0.f;
 
-        const float ToPOILength = FVector2D(DirToPOI.X, DirToPOI.Y).Size();
-        if (ToPOILength <= KINDA_SMALL_NUMBER)
+        const float DistanceToPOI = FVector2D(ToPOI.X, ToPOI.Y).Size();
+        if (DistanceToPOI <= KINDA_SMALL_NUMBER)
         {
                 OutPoints.Add(POILocation);
                 return;
         }
 
-        FVector Forward = FVector(DirToPOI.X, DirToPOI.Y, 0.f);
+        FVector Forward = FVector(ToPOI.X, ToPOI.Y, 0.f);
         Forward.Normalize();
 
         FVector RoadDir = FVector(ConnectionTangent.X, ConnectionTangent.Y, 0.f);
@@ -236,77 +236,231 @@ void ARoadSegment::BuildPOIBranchPath(const FVector& ConnectionPoint,
         {
                 RoadDir = Forward;
         }
-
-        FVector SideDir = FVector(-RoadDir.Y, RoadDir.X, 0.f);
-        if (!SideDir.Normalize())
+        else if (FVector::DotProduct(RoadDir, Forward) < 0.15f)
         {
-                SideDir = FVector::ZeroVector;
+                RoadDir = Forward;
         }
 
-        float SideSign = 0.f;
-        const float CrossZ = FVector::CrossProduct(RoadDir, Forward).Z;
-        if (!FMath::IsNearlyZero(CrossZ))
+        const float BranchScale = FMath::Clamp(ScalePOI, 0.25f, 1.25f);
+        const float ExtraClearance = GenSettings ? FMath::Max(0.f, GenSettings->RoadExtraClearanceUU) : 0.f;
+        const float ClearancePadding = ExtraClearance + FMath::Lerp(90.f, 180.f, FMath::Clamp(BranchScale, 0.f, 1.f));
+
+        auto SegmentHitsObstacle = [&](const FVector& A, const FVector& B, const FEnvironmentObstacle& Ob, float& OutParam)->bool
         {
-                SideSign = FMath::Sign(CrossZ);
-        }
-        else if (!SideDir.IsNearlyZero())
+                const FVector2D A2(A.X, A.Y);
+                const FVector2D B2(B.X, B.Y);
+                const FVector2D AB = B2 - A2;
+                const float LenSq = AB.SizeSquared();
+
+                FVector2D Closest = A2;
+                float Param = 0.f;
+
+                if (LenSq > KINDA_SMALL_NUMBER)
+                {
+                        Param = FMath::Clamp(FVector2D::DotProduct(FVector2D(Ob.Location.X, Ob.Location.Y) - A2, AB) / LenSq, 0.f, 1.f);
+                        Closest = A2 + AB * Param;
+                }
+
+                const float DistSq = FVector2D::DistSquared(Closest, FVector2D(Ob.Location.X, Ob.Location.Y));
+                const float Radius = Ob.Radius + ClearancePadding;
+                if (DistSq <= Radius * Radius)
+                {
+                        OutParam = Param;
+                        return true;
+                }
+
+                return false;
+        };
+
+        auto SegmentBlocked = [&](const FVector& A, const FVector& B, const FEnvironmentObstacle*& OutObstacle, float& OutParam)->bool
         {
-                SideSign = (Rng.FRand() < 0.5f) ? 1.f : -1.f;
+                bool bHit = false;
+                float BestParam = 1.f;
+                const FEnvironmentObstacle* BestObstacle = nullptr;
+
+                for (const FEnvironmentObstacle& Ob : CachedObstacles)
+                {
+                        float Param = 0.f;
+                        if (SegmentHitsObstacle(A, B, Ob, Param))
+                        {
+                                if (!bHit || Param < BestParam)
+                                {
+                                        bHit = true;
+                                        BestParam = Param;
+                                        BestObstacle = &Ob;
+                                }
+                        }
+                }
+
+                if (bHit)
+                {
+                        OutObstacle = BestObstacle;
+                        OutParam = BestParam;
+                }
+
+                return bHit;
+        };
+
+        auto ProgressToZ = [&](const FVector& Point)->float
+        {
+                const float DistFromConnection = FVector::Dist2D(ConnectionPoint, Point);
+                return (DistanceToPOI > KINDA_SMALL_NUMBER)
+                        ? FMath::Clamp(DistFromConnection / DistanceToPOI, 0.f, 1.f)
+                        : 0.f;
+        };
+
+        // Initial guide along the road tangent to avoid immediate sharp turns.
+        const float StartAdvance = FMath::Clamp(DistanceToPOI * (0.18f + 0.22f * BranchScale), 150.f, 420.f);
+        FVector StartAnchor = ConnectionPoint + RoadDir * StartAdvance;
+        StartAnchor.Z = FMath::Lerp(ConnectionPoint.Z, POILocation.Z, FMath::Clamp(StartAdvance / DistanceToPOI, 0.f, 1.f));
+        StartAnchor = AdjustForObstacles(StartAnchor);
+
+        const FEnvironmentObstacle* AnchorBlocker = nullptr;
+        float AnchorBlockParam = 0.f;
+        if (SegmentBlocked(ConnectionPoint, StartAnchor, AnchorBlocker, AnchorBlockParam))
+        {
+                StartAnchor = ConnectionPoint;
         }
 
-        float SideStrength = 0.f;
-        if (!SideDir.IsNearlyZero())
+        if (!StartAnchor.Equals(ConnectionPoint, 1.f))
         {
-                const float SideScale = FMath::Clamp(ScalePOI, 0.25f, 1.f);
-                SideStrength = ToPOILength * 0.25f * SideScale;
+                StartAnchor = ClampBranchDeviation(ConnectionPoint, Forward, DistanceToPOI, StartAnchor);
+                OutPoints.Add(StartAnchor);
         }
 
-        FVector StartSideOffset = SideDir * SideStrength * SideSign;
-        if (!SideDir.IsNearlyZero())
+        auto ChooseDetourPoint = [&](const FVector& CurrentPoint, const FEnvironmentObstacle& Ob, float HitParam)->FVector
         {
-                const float Jitter = (Rng.FRand() - 0.5f) * 0.3f; // -0.15..0.15
-                StartSideOffset += SideDir * SideStrength * Jitter;
+                FVector2D Start2(CurrentPoint.X, CurrentPoint.Y);
+                FVector2D End2(POILocation.X, POILocation.Y);
+                FVector2D Dir2 = End2 - Start2;
+                if (!Dir2.Normalize())
+                {
+                        Dir2 = FVector2D(Forward.X, Forward.Y);
+                        Dir2.Normalize();
+                }
+
+                const FVector2D Perp2(-Dir2.Y, Dir2.X);
+                const FVector2D Center2(Ob.Location.X, Ob.Location.Y);
+                const float Radius = Ob.Radius + ClearancePadding;
+
+                const float SideCross = Dir2.X * (Center2.Y - Start2.Y) - Dir2.Y * (Center2.X - Start2.X);
+                const float PreferredSign = (SideCross >= 0.f) ? -1.f : 1.f;
+
+                auto MakeCandidate = [&](float SideSign)->FVector
+                {
+                        const float ForwardPush = Radius + 120.f;
+                        const float SidePush = Radius + 140.f;
+                        const FVector2D Candidate2 = Center2 + Dir2 * ForwardPush + Perp2 * SideSign * SidePush;
+                        FVector Candidate(Candidate2.X, Candidate2.Y, FMath::Lerp(ConnectionPoint.Z, POILocation.Z, FMath::Clamp(HitParam + 0.2f, 0.f, 1.f)));
+                        Candidate = AdjustForObstacles(Candidate);
+                        return Candidate;
+                };
+
+                auto EvaluateCandidate = [&](const FVector& Candidate)->float
+                {
+                        const float LargePenalty = 1e12f;
+                        if (Candidate.Equals(CurrentPoint, 1.f))
+                        {
+                                return LargePenalty;
+                        }
+
+                        const FEnvironmentObstacle* Blocker = nullptr;
+                        float BlockParam = 0.f;
+                        if (SegmentBlocked(CurrentPoint, Candidate, Blocker, BlockParam))
+                        {
+                                return LargePenalty;
+                        }
+
+                        float Score = FVector::DistSquared(CurrentPoint, Candidate);
+                        Score += FVector::DistSquared(Candidate, POILocation) * 0.1f;
+                        return Score;
+                };
+
+                const FVector CandidatePreferred = MakeCandidate(PreferredSign);
+                const float ScorePreferred = EvaluateCandidate(CandidatePreferred);
+
+                const FVector CandidateOpposite = MakeCandidate(-PreferredSign);
+                const float ScoreOpposite = EvaluateCandidate(CandidateOpposite);
+
+                const bool bPreferredValid = ScorePreferred < 1e12f;
+                const bool bOppositeValid = ScoreOpposite < 1e12f;
+
+                if (!bPreferredValid && !bOppositeValid)
+                {
+                        // Fall back to a perpendicular push if both candidates collide.
+                        const FVector2D Fallback2 = Start2 + Perp2 * PreferredSign * (Radius + 200.f);
+                        FVector Fallback(Fallback2.X, Fallback2.Y, FMath::Lerp(ConnectionPoint.Z, POILocation.Z, FMath::Clamp(HitParam + 0.2f, 0.f, 1.f)));
+                        return AdjustForObstacles(Fallback);
+                }
+
+                if (bPreferredValid && bOppositeValid && FMath::IsNearlyEqual(ScorePreferred, ScoreOpposite))
+                {
+                        return (Rng.FRand() < 0.5f) ? CandidatePreferred : CandidateOpposite;
+                }
+
+                if (!bOppositeValid || ScorePreferred <= ScoreOpposite)
+                {
+                        return CandidatePreferred;
+                }
+
+                return CandidateOpposite;
+        };
+
+        FVector CurrentPoint = OutPoints.Last();
+        const int32 MaxDetours = 12;
+        for (int32 Iter = 0; Iter < MaxDetours; ++Iter)
+        {
+                const FEnvironmentObstacle* BlockingObstacle = nullptr;
+                float HitParam = 1.f;
+                if (!SegmentBlocked(CurrentPoint, POILocation, BlockingObstacle, HitParam))
+                {
+                        break; // Direct path to POI is clear.
+                }
+
+                FVector NextPoint = ChooseDetourPoint(CurrentPoint, *BlockingObstacle, HitParam);
+                const float Progress = ProgressToZ(NextPoint);
+                NextPoint.Z = FMath::Lerp(ConnectionPoint.Z, POILocation.Z, Progress);
+                NextPoint = AdjustForObstacles(NextPoint);
+                NextPoint = ClampBranchDeviation(ConnectionPoint, Forward, DistanceToPOI, NextPoint);
+
+                if (FVector::DistSquared(NextPoint, CurrentPoint) < 4.f)
+                {
+                        // If we failed to move, push forward slightly to avoid stalling.
+                        FVector Nudge = CurrentPoint + Forward * (BlockingObstacle->Radius + ClearancePadding + 200.f);
+                        Nudge.Z = FMath::Lerp(ConnectionPoint.Z, POILocation.Z, HitParam);
+                        NextPoint = AdjustForObstacles(Nudge);
+                        NextPoint = ClampBranchDeviation(ConnectionPoint, Forward, DistanceToPOI, NextPoint);
+                }
+
+                if (FVector::DistSquared(NextPoint, CurrentPoint) < 4.f)
+                {
+                        // No progress possible, stop detouring to avoid infinite loops.
+                        break;
+                }
+
+                OutPoints.Add(NextPoint);
+                CurrentPoint = NextPoint;
         }
 
-        const float Blend = 0.6f;
-        FVector StartDir = RoadDir * Blend + Forward * (1.f - Blend);
-        if (!StartDir.Normalize())
+        if (!OutPoints.Last().Equals(POILocation, 1.f))
         {
-                StartDir = Forward;
-        }
-        else if (FVector::DotProduct(StartDir, Forward) < 0.1f)
-        {
-                StartDir = Forward;
+                OutPoints.Add(POILocation);
         }
 
-        float LeadDistance = FMath::Clamp(ToPOILength * 0.35f, 180.f, 520.f);
-        LeadDistance *= FMath::Lerp(0.65f, 1.15f, FMath::Clamp(ScalePOI, 0.2f, 1.f));
-        FVector StartTangent = StartDir * LeadDistance + StartSideOffset;
-        StartTangent = StartTangent.GetClampedToMaxSize(ToPOILength * 0.6f);
-
-        const float ForwardComponent = FVector::DotProduct(StartTangent, Forward);
-        const float MinForwardComponent = ToPOILength * 0.18f;
-        if (ForwardComponent < MinForwardComponent)
+        for (int32 i = OutPoints.Num() - 1; i > 0; --i)
         {
-                StartTangent += Forward * (MinForwardComponent - ForwardComponent);
-        }
-        StartTangent = StartTangent.GetClampedToMaxSize(ToPOILength * 0.6f);
-
-        FVector EndDir = Forward;
-        FVector EndTangent = EndDir * FMath::Clamp(ToPOILength * 0.3f, 140.f, 480.f);
-
-        const int32 MidCountRef = GenSettings ? static_cast<int32>(GenSettings->RoadMidpointCount) : 0;
-        const int32 NumSegments = FMath::Clamp(1 + MidCountRef / 3, 2, 6);
-        for (int32 Step = 1; Step < NumSegments; ++Step)
-        {
-                const float T = static_cast<float>(Step) / static_cast<float>(NumSegments);
-                FVector Candidate = EvaluateHermite(ConnectionPoint, StartTangent, POILocation, EndTangent, T);
-                Candidate = AdjustForObstacles(Candidate);
-                Candidate = ClampBranchDeviation(ConnectionPoint, Forward, ToPOILength, Candidate);
-                OutPoints.Add(Candidate);
+                if (FVector::DistSquared(OutPoints[i], OutPoints[i - 1]) <= 4.f)
+                {
+                        OutPoints.RemoveAt(i);
+                }
         }
 
-        OutPoints.Add(POILocation);
+        if (OutPoints.Num() < 2)
+        {
+                OutPoints.Reset();
+                OutPoints.Add(ConnectionPoint);
+                OutPoints.Add(POILocation);
+        }
 }
 
 FVector ARoadSegment::AdjustForObstacles(const FVector& Point) const
