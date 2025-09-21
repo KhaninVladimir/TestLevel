@@ -9,6 +9,7 @@
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Engine/World.h"
+#include "Templates/NumericLimits.h"
 
 // ===== Helpers: coordinate system =====
 
@@ -51,19 +52,27 @@ FVector ALocationRoom::RoomLocalToWorld(const FVector& L) const
 
 FVector ALocationRoom::SideOriginWorld(ERoomSide Side) const
 {
-	const FVector2f H = GetHalfSize();
-	const FVector Center = GetRoomCenter();
+        const FVector2f H = GetHalfSize();
+        const FVector Center = GetRoomCenter();
+        const FQuat RoomQ = GetActorQuat();
+        const FVector LocalOffset = LocalOut(Side) * FVector(H.X, H.Y, 0.f);
 
-	return Center + LocalOut(Side) * FVector(H.X, H.Y, 0.f);
+        return Center + RoomQ.RotateVector(LocalOffset);
 }
 
 FVector ALocationRoom::SideDirection(ERoomSide Side) const
 {
-	if (Side == ERoomSide::North || Side == ERoomSide::South)
-	{
-		return FVector(1, 0, 0); // along X 
-	}
-	return FVector(0, 1, 0); // along Y
+        if (Side == ERoomSide::North || Side == ERoomSide::South)
+        {
+                return FVector(1, 0, 0); // along X
+        }
+        return FVector(0, 1, 0); // along Y
+}
+
+FVector ALocationRoom::SideDirectionWorld(ERoomSide Side) const
+{
+        const FQuat RoomQ = GetActorQuat();
+        return RoomQ.RotateVector(SideDirection(Side));
 }
 
 FVector ALocationRoom::LocalOut(ERoomSide Side) const
@@ -87,11 +96,21 @@ bool ALocationRoom::IsInsideRoom(const FVector& P) const
 
 bool ALocationRoom::SatisfiesMinDist(const FVector& P, const TArray<FVector>& Points, float MinDist) const
 {
-	for (const FVector& Q : Points)
-	{
-		if (FVector::Dist2D(P, Q) < MinDist) return false;
-	}
-	return true;
+        for (const FVector& Q : Points)
+        {
+                if (FVector::Dist2D(P, Q) < MinDist) return false;
+        }
+        return true;
+}
+
+float ALocationRoom::DistanceToRoads(const FVector& P) const
+{
+        if (RoadNetwork)
+        {
+                return RoadNetwork->DistanceToRoads(P);
+        }
+
+        return TNumericLimits<float>::Max();
 }
 
 // ===== Generation entry =====
@@ -130,15 +149,15 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 	Entrance.HalfWidth = GenSettings->DoorwayHalfWidth;
 	Entrance.WorldTransform = GetActorTransform();
 
-	const FVector OutWS = RoomQ.RotateVector(LocalOut(Entrance.Side)).GetSafeNormal();
-	const FVector AlongWS = RoomQ.RotateVector(SideDirection(Entrance.Side)).GetSafeNormal();
+        const FVector OutWS = RoomQ.RotateVector(LocalOut(Entrance.Side)).GetSafeNormal();
+        const FVector AlongWS = SideDirectionWorld(Entrance.Side).GetSafeNormal();
 	const FVector2f H = GetHalfSize();
 	const float HalfSpanToSide = (Entrance.Side == ERoomSide::North || Entrance.Side == ERoomSide::South) ? H.Y : H.X;
 	RoomCenter = EntranceWorld - OutWS * HalfSpanToSide - AlongWS * Entrance.OffsetAlongSide;
 
 	// --- 3) Compute along-offset ON THAT SIDE (rotation-aware) ---
-	const FVector SideOriginNow = SideOriginWorld(EntranceSide);
-	const FVector AlongDir = SideDirection(EntranceSide);
+        const FVector SideOriginNow = SideOriginWorld(EntranceSide);
+        const FVector AlongDir = SideDirectionWorld(EntranceSide);
 
 	const float HalfSpan = (EntranceSide == ERoomSide::North || EntranceSide == ERoomSide::South)
 		? GenSettings->RoomSize.Width * 0.5f    // span along local X
@@ -213,14 +232,11 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 
 		D.HalfWidth = GenSettings->DoorwayHalfWidth;
 
-		FVector LocalOrigin = SideOriginWorld(D.Side);
-		FVector LocalAlong = SideDirection(D.Side);
+                const FVector DOriginWS = SideOriginWorld(D.Side);
+                const FVector DAlongWS = SideDirectionWorld(D.Side).GetSafeNormal();
+                const FVector CenterWS = DOriginWS + DAlongWS * D.OffsetAlongSide;
 
-		const FVector DOriginWS = Entrance.WorldTransform.TransformPosition(LocalOrigin);
-		const FVector DAlongWS = RoomQ.RotateVector(LocalAlong).GetSafeNormal();
-		const FVector CenterWS = DOriginWS + DAlongWS * D.OffsetAlongSide;
-
-		const FVector DOutWS = RoomQ.RotateVector(LocalOut(D.Side)).GetSafeNormal();
+                const FVector DOutWS = RoomQ.RotateVector(LocalOut(D.Side)).GetSafeNormal();
 		const FRotator RotWS = UKismetMathLibrary::MakeRotFromXZ(DOutWS, FVector::UpVector);
 		
 		D.WorldTransform = FTransform(RotWS, CenterWS);
@@ -288,11 +304,11 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
 					Openings.Add(E);
 			}
 
-			const FVector SideOrigin = SideOriginWorld(Side);
-			const FVector Along = SideDirection(Side);
+                        const FVector SideOrigin = SideOriginWorld(Side);
+                        const FVector Along = SideDirectionWorld(Side).GetSafeNormal();
 
-			// Rotation for all segments on this side is constant
-			const FQuat SegmentRot = Along.Rotation().Quaternion();
+                        // Rotation for all segments on this side is constant
+                        const FQuat SegmentRot = Along.Rotation().Quaternion();
 
 			// Fast path: no openings → add all segments
 			if (Openings.Num() == 0)
@@ -301,11 +317,11 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
 				{
 					const float CenterOff = -Span * 0.5f + (i + 0.5f) * Step;
 
-					FTransform T;
-					T.SetLocation(SideOrigin + Along * CenterOff);
-					T.SetRotation(SegmentRot);
-					T.SetScale3D(FVector(1, 1, 1));
-					WallISM->AddInstance(T);
+                                        FTransform T;
+                                        T.SetLocation(SideOrigin + Along * CenterOff);
+                                        T.SetRotation(SegmentRot);
+                                        T.SetScale3D(FVector(1, 1, 1));
+                                        WallISM->AddInstanceWorldSpace(T);
 				}
 				return;
 			}
@@ -326,11 +342,11 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
 				}
 				if (bCovered) continue;
 
-				FTransform T;
-				T.SetLocation(SideOrigin + Along * CenterOff);
-				T.SetRotation(SegmentRot);
-				T.SetScale3D(FVector(1, 1, 1));
-				WallISM->AddInstance(T);
+                                FTransform T;
+                                T.SetLocation(SideOrigin + Along * CenterOff);
+                                T.SetRotation(SegmentRot);
+                                T.SetScale3D(FVector(1, 1, 1));
+                                WallISM->AddInstanceWorldSpace(T);
 			}
 		};
 
@@ -361,8 +377,8 @@ void ALocationRoom::SpawnFinishMarkers(TArray<AWorldFinishMarker*>& OutMarkers)
 
 	for (const FDoorwaySpec& D : Exits)
 	{
-		const FVector Origin = SideOriginWorld(D.Side);
-		const FVector Along = SideDirection(D.Side);
+                const FVector Origin = SideOriginWorld(D.Side);
+                const FVector Along = SideDirectionWorld(D.Side);
 		const FVector P = Origin + Along * D.OffsetAlongSide;
 
 		if (AWorldFinishMarker* Marker = W->SpawnActor<AWorldFinishMarker>(AWorldFinishMarker::StaticClass(), D.WorldTransform))
@@ -518,15 +534,16 @@ void ALocationRoom::SpawnMonsters(TArray<AActor*>& OutMonsters)
 
 	// Jitter inside cell (keeps samples away from borders a bit)
 	const float Jx = CellW * 0.35f;
-	const float Jy = CellH * 0.35f;
+        const float Jy = CellH * 0.35f;
 
-	// --- Generate candidate points in world, covering the WHOLE room ---
-	TArray<FVector> Chosen; Chosen.Reserve(TotalNeed);
+        // --- Generate candidate points in world, covering the WHOLE room ---
+        TArray<FVector> Chosen; Chosen.Reserve(TotalNeed);
+        const float MinRoadDistance = FMath::Max(0.f, GenSettings->MonsterMinDistanceFromRoad);
 
-	const int32 MaxPasses = 3;
-	for (int32 pass = 0; pass < MaxPasses && Chosen.Num() < TotalNeed; ++pass)
-	{
-		for (int32 iy = 0; iy < CellsY && Chosen.Num() < TotalNeed; ++iy)
+        const int32 MaxPasses = 3;
+        for (int32 pass = 0; pass < MaxPasses && Chosen.Num() < TotalNeed; ++pass)
+        {
+                for (int32 iy = 0; iy < CellsY && Chosen.Num() < TotalNeed; ++iy)
 		{
 			for (int32 ix = 0; ix < CellsX && Chosen.Num() < TotalNeed; ++ix)
 			{
@@ -538,28 +555,33 @@ void ALocationRoom::SpawnMonsters(TArray<AActor*>& OutMonsters)
 				const float Lx = FMath::Clamp(Cx + Rng.FRandRange(-Jx, +Jx), -H.X + SafeMarginX, H.X - SafeMarginX);
 				const float Ly = FMath::Clamp(Cy + Rng.FRandRange(-Jy, +Jy), -H.Y + SafeMarginY, H.Y - SafeMarginY);
 
-				const FVector P = RoomLocalToWorld(FVector(Lx, Ly, 0.f));
-				if (!IsInsideRoom(P)) continue;
-				if (!SatisfiesMinDist(P, POIPoints, GenSettings->MonsterMinDistanceFromPOI)) continue;
+                                const FVector P = RoomLocalToWorld(FVector(Lx, Ly, 0.f));
+                                if (!IsInsideRoom(P)) continue;
+                                if (!SatisfiesMinDist(P, POIPoints, GenSettings->MonsterMinDistanceFromPOI)) continue;
+                                if (MinRoadDistance > 0.f && DistanceToRoads(P) < MinRoadDistance) continue;
 
-				Chosen.Add(P);
-			}
-		}
-	}
+                                Chosen.Add(P);
+                        }
+                }
+        }
 
 	// Fallback: relaxed sampling if constraints are tight
-	const int32 TriesPer = 64;
-	while (Chosen.Num() < TotalNeed)
-	{
-		const float Lx = Rng.FRandRange(-H.X + SafeMarginX, H.X - SafeMarginX);
-		const float Ly = Rng.FRandRange(-H.Y + SafeMarginY, H.Y - SafeMarginY);
-		const FVector P = RoomLocalToWorld(FVector(Lx, Ly, 0.f));
+        const int32 TriesPer = 64;
+        const int32 MaxTries = TriesPer * FMath::Max(1, TotalNeed);
+        int32 Attempt = 0;
+        while (Chosen.Num() < TotalNeed && Attempt < MaxTries)
+        {
+                ++Attempt;
+                const float Lx = Rng.FRandRange(-H.X + SafeMarginX, H.X - SafeMarginX);
+                const float Ly = Rng.FRandRange(-H.Y + SafeMarginY, H.Y - SafeMarginY);
+                const FVector P = RoomLocalToWorld(FVector(Lx, Ly, 0.f));
 
-		if (!IsInsideRoom(P)) continue;
-		if (!SatisfiesMinDist(P, POIPoints, GenSettings->MonsterMinDistanceFromPOI)) continue;
+                if (!IsInsideRoom(P)) continue;
+                if (!SatisfiesMinDist(P, POIPoints, GenSettings->MonsterMinDistanceFromPOI)) continue;
+                if (MinRoadDistance > 0.f && DistanceToRoads(P) < MinRoadDistance) continue;
 
-		Chosen.Add(P);
-	}
+                Chosen.Add(P);
+        }
 
 	if (Chosen.IsEmpty()) 
 		return;
@@ -586,12 +608,25 @@ void ALocationRoom::SpawnMonsters(TArray<AActor*>& OutMonsters)
 
 void ALocationRoom::SpawnRoads()
 {
-	UWorld* W = GetWorld();
-	if (W && GenSettings && GenSettings->RoadSplineMesh && RoadPoint.Num() > 1)
-	{
-		if (ARoadSegment* RoadNet = W->SpawnActor<ARoadSegment>(ARoadSegment::StaticClass(), GetActorTransform()))
-		{
-			RoadNet->BuildNetwork(RoadPoint, Exits.Num(), GetHalfSize(), GenSettings, Rng);
-		}
-	}
+        UWorld* W = GetWorld();
+        if (!W || !GenSettings)
+        {
+                RoadNetwork = nullptr;
+                return;
+        }
+
+        if (RoadNetwork && !RoadNetwork->IsPendingKillPending())
+        {
+                RoadNetwork->Destroy();
+        }
+        RoadNetwork = nullptr;
+
+        if (GenSettings->RoadSplineMesh && RoadPoint.Num() > 1)
+        {
+                if (ARoadSegment* RoadNet = W->SpawnActor<ARoadSegment>(ARoadSegment::StaticClass(), GetActorTransform()))
+                {
+                        RoadNetwork = RoadNet;
+                        RoadNet->BuildNetwork(RoadPoint, Exits.Num(), GetHalfSize(), GenSettings, Rng);
+                }
+        }
 }

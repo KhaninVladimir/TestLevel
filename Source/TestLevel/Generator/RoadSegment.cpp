@@ -5,6 +5,7 @@
 #include "Components/SplineComponent.h"
 #include "Components/SplineMeshComponent.h"
 #include "Kismet/KismetMathLibrary.h"
+#include "Templates/NumericLimits.h"
 
 ARoadSegment::ARoadSegment()
 {
@@ -15,15 +16,17 @@ ARoadSegment::ARoadSegment()
 
 void ARoadSegment::ClearNetwork()
 {
-	// Destroy all spline/spline mesh components created earlier
-	TArray<UActorComponent*> Comps = GetComponents().Array();
-	for (UActorComponent* C : Comps)
-	{
-		if (C && (C->IsA<USplineComponent>() || C->IsA<USplineMeshComponent>()))
-		{
-			C->DestroyComponent();
-		}
-	}
+        BuiltPaths.Reset();
+
+        // Destroy all spline/spline mesh components created earlier
+        TArray<UActorComponent*> Comps = GetComponents().Array();
+        for (UActorComponent* C : Comps)
+        {
+                if (C && (C->IsA<USplineComponent>() || C->IsA<USplineMeshComponent>()))
+                {
+                        C->DestroyComponent();
+                }
+        }
 }
 
 float ARoadSegment::ClearanceToRect(const FVector2f& P, const FVector2f& H)
@@ -109,37 +112,43 @@ void ARoadSegment::MaybeAddShortcuts(const TArray<FVector2f>& PtsLocal, const FV
 }
 
 void ARoadSegment::MakeCurvedPath(const FVector& A, const FVector& B,
-	int32 MidCount,
-	float MaxPerp,
-	float NoiseJitter,
-	float TangentStrength,
-	FRandomStream& Rng,
-	TArray<FVector>& OutPoints)
+        int32 MidCount,
+        float MaxPerp,
+        float NoiseJitter,
+        float TangentStrength,
+        float BaselineCurvature,
+        FRandomStream& Rng,
+        TArray<FVector>& OutPoints)
 {
-	OutPoints.Reset();
-	OutPoints.Add(A);
+        OutPoints.Reset();
+        OutPoints.Add(A);
 
-	const FVector AB = B - A;
-	const float   Len = FMath::Max(1.f, AB.Size());
-	const FVector Dir = AB / Len;
-	// 2D perp in XY plane (top-down feel). If you want full 3D, build an orthonormal basis.
-	const FVector Perp = FVector(-Dir.Y, Dir.X, 0.f).GetSafeNormal();
+        const FVector AB = B - A;
+        const float   Len = FMath::Max(1.f, AB.Size());
+        const FVector Dir = AB / Len;
+        // 2D perp in XY plane (top-down feel). If you want full 3D, build an orthonormal basis.
+        const FVector Perp = FVector(-Dir.Y, Dir.X, 0.f).GetSafeNormal();
 
-	for (int32 i = 1; i <= MidCount; ++i)
-	{
-		const float t = static_cast<float>(i) / (MidCount + 1);
-		const FVector Base = A + Dir * (t * Len);
+        const float BaseSign = (BaselineCurvature != 0.f) ? (Rng.FRand() < 0.5f ? -1.f : 1.f) : 0.f;
+        const float BaseAmplitude = FMath::Max(0.f, BaselineCurvature) * Len;
 
-		// Alternate left/right with decreasing amplitude towards ends
-		const float edgeFalloff = FMath::Sin(PI * t);         // 0..1..0
-		const float sign = (i % 2 == 0) ? -1.f : +1.f;
-		const float jitter = Rng.FRandRange(-NoiseJitter, +NoiseJitter);
+        for (int32 i = 1; i <= MidCount; ++i)
+        {
+                const float t = static_cast<float>(i) / (MidCount + 1);
+                const FVector Base = A + Dir * (t * Len);
 
-		const FVector Offset = Perp * (sign * MaxPerp * edgeFalloff) + FVector::UpVector * 0.f;
-		OutPoints.Add(Base + Offset + Dir * jitter * 0.1f);
-	}
+                // Alternate left/right with decreasing amplitude towards ends
+                const float edgeFalloff = FMath::Sin(PI * t);         // 0..1..0
+                const float sign = (i % 2 == 0) ? -1.f : +1.f;
+                const float jitter = Rng.FRandRange(-NoiseJitter, +NoiseJitter);
 
-	OutPoints.Add(B);
+                const float baselineOffset = BaseSign * BaseAmplitude * edgeFalloff;
+
+                const FVector Offset = Perp * (sign * MaxPerp * edgeFalloff + baselineOffset) + FVector::UpVector * 0.f;
+                OutPoints.Add(Base + Offset + Dir * jitter * 0.1f);
+        }
+
+        OutPoints.Add(B);
 
 	// (Tangents are set when we build spline meshes from these points)
 }
@@ -280,7 +289,9 @@ int32 ARoadSegment::FindNearestPointOnPath(const FVector& Point, const TArray<FV
 
 void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount, const FVector2f& RoomHalfSize, const UWorldGenSettings* Settings, FRandomStream& Rng)
 {
-	if (NodesWS.Num() <= 1 || !Settings || ExitCount < 1) return;
+        BuiltPaths.Reset();
+
+        if (NodesWS.Num() <= 1 || !Settings || ExitCount < 1) return;
 
 	GenSettings = Settings;
 
@@ -333,13 +344,14 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
 	// Build curved path to offset point
 	TArray<FVector> MainPath;
 	const float Scale = EdgeOffsetScale(PtsLocal[EntryIdx], PtsLocal[FarthestExitIdx], RoomHalfSize);
-	MakeCurvedPath(NodesWS[EntryIdx], OffsetPoint,
-		static_cast<int32>(GenSettings->RoadMidpointCount),
-		GenSettings->RoadMaxPerpOffset * Scale,
-		GenSettings->RoadNoiseJitter * Scale,
-		GenSettings->RoadTangentStrength,
-		Rng,
-		MainPath);
+        MakeCurvedPath(NodesWS[EntryIdx], OffsetPoint,
+                static_cast<int32>(GenSettings->RoadMidpointCount),
+                GenSettings->RoadMaxPerpOffset * Scale,
+                GenSettings->RoadNoiseJitter * Scale,
+                GenSettings->RoadTangentStrength,
+                GenSettings->RoadBaselineCurvature * Scale,
+                Rng,
+                MainPath);
 
 	// Add final segment to actual exit
 	MainPath.Add(NodesWS[FarthestExitIdx]);
@@ -371,13 +383,14 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
 			PtsLocal[i],
 			RoomHalfSize);
 
-		MakeCurvedPath(ConnectionPoint, OffsetPointLocal,
-			FMath::Max(1, static_cast<int32>(GenSettings->RoadMidpointCount) / 2), // Fewer midpoints for branches
-			GenSettings->RoadMaxPerpOffset * ScaleLocal * 0.7f, // Less deviation for branches
-			GenSettings->RoadNoiseJitter * ScaleLocal * 0.7f,
-			GenSettings->RoadTangentStrength,
-			Rng,
-			ExitPath);
+                MakeCurvedPath(ConnectionPoint, OffsetPointLocal,
+                        FMath::Max(1, static_cast<int32>(GenSettings->RoadMidpointCount) / 2), // Fewer midpoints for branches
+                        GenSettings->RoadMaxPerpOffset * ScaleLocal * 0.7f, // Less deviation for branches
+                        GenSettings->RoadNoiseJitter * ScaleLocal * 0.7f,
+                        GenSettings->RoadTangentStrength,
+                        GenSettings->RoadBaselineCurvature * ScaleLocal * 0.7f,
+                        Rng,
+                        ExitPath);
 
 		// Add final segment to actual exit
 		ExitPath.Add(NodesWS[i]);
@@ -433,16 +446,57 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
 				PtsLocal[i],
 				RoomHalfSize);
 
-			MakeCurvedPath(BestConnectionPoint, NodesWS[i],
-				FMath::Max(1, static_cast<int32>(GenSettings->RoadMidpointCount) / 3), // Even fewer midpoints for POI connections
-				GenSettings->RoadMaxPerpOffset * ScalePOI * 0.5f, // Less deviation for POI branches
-				GenSettings->RoadNoiseJitter * ScalePOI * 0.5f,
-				GenSettings->RoadTangentStrength,
-				Rng,
-				POIPath);
+                        MakeCurvedPath(BestConnectionPoint, NodesWS[i],
+                                FMath::Max(1, static_cast<int32>(GenSettings->RoadMidpointCount) / 3), // Even fewer midpoints for POI connections
+                                GenSettings->RoadMaxPerpOffset * ScalePOI * 0.5f, // Less deviation for POI branches
+                                GenSettings->RoadNoiseJitter * ScalePOI * 0.5f,
+                                GenSettings->RoadTangentStrength,
+                                GenSettings->RoadBaselineCurvature * ScalePOI * 0.5f,
+                                Rng,
+                                POIPath);
 
-			AllPaths.Add(POIPath);
-			BuildOnePath(POIPath);
-		}
-	}
+                        AllPaths.Add(POIPath);
+                        BuildOnePath(POIPath);
+                }
+        }
+
+        BuiltPaths = AllPaths;
+}
+
+float ARoadSegment::DistanceToRoads(const FVector& Point) const
+{
+        if (BuiltPaths.IsEmpty())
+        {
+                return TNumericLimits<float>::Max();
+        }
+
+        const FVector2D P2(Point.X, Point.Y);
+        float Best = TNumericLimits<float>::Max();
+
+        for (const TArray<FVector>& Path : BuiltPaths)
+        {
+                for (int32 idx = 0; idx < Path.Num() - 1; ++idx)
+                {
+                        const FVector2D A(Path[idx].X, Path[idx].Y);
+                        const FVector2D B(Path[idx + 1].X, Path[idx + 1].Y);
+                        const FVector2D AB = B - A;
+                        const float LenSq = AB.SizeSquared();
+
+                        float Dist = 0.f;
+                        if (LenSq <= KINDA_SMALL_NUMBER)
+                        {
+                                Dist = FVector2D::Distance(P2, A);
+                        }
+                        else
+                        {
+                                const float t = FMath::Clamp(FVector2D::DotProduct(P2 - A, AB) / LenSq, 0.f, 1.f);
+                                const FVector2D Closest = A + AB * t;
+                                Dist = FVector2D::Distance(P2, Closest);
+                        }
+
+                        Best = FMath::Min(Best, Dist);
+                }
+        }
+
+        return Best;
 }
