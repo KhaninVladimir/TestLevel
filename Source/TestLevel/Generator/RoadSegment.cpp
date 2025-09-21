@@ -18,6 +18,7 @@ void ARoadSegment::ClearNetwork()
         BuiltPaths.Reset();
         CachedObstacles.Reset();
         CachedRoomHalfSize = FVector2f::ZeroVector;
+        CachedSplineSamples.Reset();
 
         // Destroy all spline/spline mesh components created earlier
         TArray<UActorComponent*> Comps = GetComponents().Array();
@@ -114,193 +115,87 @@ void ARoadSegment::MaybeAddShortcuts(const TArray<FVector2f>& PtsLocal, const FV
 
 void ARoadSegment::BuildMainPath(const FVector& Start, const FVector& End, FRandomStream& Rng, TArray<FVector>& OutPoints)
 {
-        OutPoints.Reset();
+        const float Distance = FVector::Dist2D(Start, End);
+        const float Ratio = (Distance > 2000.f) ? 0.25f : 0.2f;
+        const int32 MinAnchors = (Distance > 1800.f) ? 3 : 1;
+        BuildOrganicPath(Start, End, Rng, Ratio, MinAnchors, OutPoints);
+}
 
-        FVector2D Dir2D(End.X - Start.X, End.Y - Start.Y);
-        const float Distance = Dir2D.Size();
+void ARoadSegment::BuildBranchPath(const FVector& StartPoint, const FVector& Target, FRandomStream& Rng, TArray<FVector>& OutPoints)
+{
+        const float Distance = FVector::Dist2D(StartPoint, Target);
+        const float Ratio = (Distance > 1200.f) ? 0.22f : 0.16f;
+        const int32 MinAnchors = (Distance > 900.f) ? 2 : (Distance > 480.f ? 1 : 0);
+        BuildOrganicPath(StartPoint, Target, Rng, Ratio, MinAnchors, OutPoints);
+}
+
+void ARoadSegment::BuildOrganicPath(const FVector& Start, const FVector& End, FRandomStream& Rng, float DeviationRatio, int32 MinAnchorCount, TArray<FVector>& OutPoints)
+{
+        OutPoints.Reset();
+        OutPoints.Add(Start);
+
+        const FVector2D Delta(End.X - Start.X, End.Y - Start.Y);
+        const float Distance = Delta.Size();
         if (Distance <= KINDA_SMALL_NUMBER)
         {
-                OutPoints.Add(Start);
                 OutPoints.Add(End);
                 return;
         }
 
-        Dir2D /= Distance;
-        const FVector2D Perp(-Dir2D.Y, Dir2D.X);
+        FVector2D Dir = Delta / Distance;
+        FVector2D Perp(-Dir.Y, Dir.X);
 
-        TArray<FVector> Seeds;
-        Seeds.Reserve(5);
-        Seeds.Add(Start);
+        const float MaxDeviation = FMath::Clamp(Distance * 0.65f, 120.f, 620.f);
+        const float BaseDeviation = FMath::Clamp(Distance * DeviationRatio, 24.f, MaxDeviation);
+        const float ForwardDeviation = BaseDeviation * 0.35f;
 
-        const float StartAdvance = FMath::Clamp(Distance * 0.2f, 220.f, 520.f);
-        if (StartAdvance > 1.f && StartAdvance < Distance * 0.75f)
+        int32 AnchorCount = 0;
+        if (Distance > 320.f)
         {
-                FVector Anchor = Start + FVector(Dir2D.X, Dir2D.Y, 0.f) * StartAdvance;
-                Anchor.Z = FMath::Lerp(Start.Z, End.Z, StartAdvance / Distance);
+                AnchorCount = FMath::FloorToInt(Distance / 900.f);
+                AnchorCount = FMath::Max(AnchorCount, MinAnchorCount);
+        }
+        else if (MinAnchorCount > 0 && Distance > 220.f)
+        {
+                AnchorCount = MinAnchorCount;
+        }
+
+        const float NoiseSeed = Rng.FRandRange(-5000.f, 5000.f);
+        for (int32 AnchorIdx = 1; AnchorIdx <= AnchorCount; ++AnchorIdx)
+        {
+                const float T = static_cast<float>(AnchorIdx) / static_cast<float>(AnchorCount + 1);
+                FVector Anchor = FMath::Lerp(Start, End, T);
+                Anchor.Z = FMath::Lerp(Start.Z, End.Z, T);
+
+                const float NoiseLateral = FMath::PerlinNoise1D(NoiseSeed + T * 2.173f);
+                const float NoiseForward = FMath::PerlinNoise1D(NoiseSeed * 0.37f + T * 3.114f);
+                const float RandomLateral = (Rng.FRand() - 0.5f) * 0.6f;
+                const float RandomForward = (Rng.FRand() - 0.5f) * 0.6f;
+
+                const float LateralOffset = (NoiseLateral + RandomLateral) * BaseDeviation;
+                const float ForwardOffset = (NoiseForward + RandomForward) * ForwardDeviation;
+
+                Anchor.X += Dir.X * ForwardOffset + Perp.X * LateralOffset;
+                Anchor.Y += Dir.Y * ForwardOffset + Perp.Y * LateralOffset;
+
                 Anchor = AdjustForObstacles(Anchor);
-                if (!Anchor.Equals(Start, 1.f))
-                {
-                        Seeds.Add(Anchor);
-                }
+                OutPoints.Add(Anchor);
         }
 
-        if (Distance > 1500.f)
+        OutPoints.Add(End);
+
+        if (OutPoints.Num() > 2)
         {
-                const float MidAdvance = Distance * 0.5f;
-                const float SideStrength = FMath::Clamp(Distance * 0.25f, 280.f, 700.f);
-                const float SideSign = (Rng.FRand() < 0.5f) ? -1.f : 1.f;
-                const float SideFactor = 0.55f + 0.45f * Rng.FRand();
-                FVector Mid = Start + FVector(Dir2D.X, Dir2D.Y, 0.f) * MidAdvance;
-                Mid += FVector(Perp.X, Perp.Y, 0.f) * SideStrength * SideSign * SideFactor;
-                Mid.Z = FMath::Lerp(Start.Z, End.Z, 0.5f);
-                Mid = AdjustForObstacles(Mid);
-                if (!Mid.Equals(Start, 5.f) && !Mid.Equals(End, 5.f))
-                {
-                        Seeds.Add(Mid);
-                }
+                RelaxPolyline(OutPoints);
         }
 
-        const float EndRetreat = FMath::Clamp(Distance * 0.2f, 220.f, 520.f);
-        if (EndRetreat > 1.f && EndRetreat < Distance * 0.75f)
+        ResolveDetours(OutPoints, Rng);
+
+        if (OutPoints.Num() >= 2)
         {
-                FVector PreEnd = End - FVector(Dir2D.X, Dir2D.Y, 0.f) * EndRetreat;
-                PreEnd.Z = FMath::Lerp(Start.Z, End.Z, FMath::Clamp((Distance - EndRetreat) / Distance, 0.f, 1.f));
-                PreEnd = AdjustForObstacles(PreEnd);
-                if (!PreEnd.Equals(End, 1.f))
-                {
-                        Seeds.Add(PreEnd);
-                }
+                OutPoints[0] = Start;
+                OutPoints.Last() = End;
         }
-
-        Seeds.Add(End);
-
-        if (Seeds.Num() > 2)
-        {
-                TArray<FVector> Sorted;
-                Sorted.Reserve(Seeds.Num());
-                Sorted.Add(Seeds[0]);
-
-                TArray<FVector> Interior;
-                Interior.Reserve(Seeds.Num() - 2);
-                for (int32 Idx = 1; Idx < Seeds.Num() - 1; ++Idx)
-                {
-                        Interior.Add(Seeds[Idx]);
-                }
-
-                Interior.Sort([&](const FVector& L, const FVector& R)
-                {
-                        const FVector2D LVec(L.X - Start.X, L.Y - Start.Y);
-                        const FVector2D RVec(R.X - Start.X, R.Y - Start.Y);
-                        const float LProj = FVector2D::DotProduct(LVec, Dir2D);
-                        const float RProj = FVector2D::DotProduct(RVec, Dir2D);
-                        return LProj < RProj;
-                });
-
-                Sorted.Append(Interior);
-                Sorted.Add(Seeds.Last());
-                Seeds = MoveTemp(Sorted);
-        }
-
-        ResolveDetours(Seeds, Rng);
-        OutPoints = MoveTemp(Seeds);
-}
-
-void ARoadSegment::BuildBranchPath(const FVector& StartPoint, const FVector& StartTangent, const FVector& Target, FRandomStream& Rng, TArray<FVector>& OutPoints)
-{
-        OutPoints.Reset();
-
-        FVector2D ToTarget(Target.X - StartPoint.X, Target.Y - StartPoint.Y);
-        const float Distance = ToTarget.Size();
-        if (Distance <= KINDA_SMALL_NUMBER)
-        {
-                OutPoints.Add(StartPoint);
-                OutPoints.Add(Target);
-                return;
-        }
-
-        FVector2D DirToTarget = ToTarget / Distance;
-        FVector2D Tangent(StartTangent.X, StartTangent.Y);
-        if (!Tangent.Normalize())
-        {
-                Tangent = DirToTarget;
-        }
-
-        const FVector2D Perp(-DirToTarget.Y, DirToTarget.X);
-
-        TArray<FVector> Seeds;
-        Seeds.Reserve(5);
-        Seeds.Add(StartPoint);
-
-        const float StartAdvance = FMath::Clamp(Distance * 0.18f, 180.f, 380.f);
-        if (StartAdvance > 1.f && StartAdvance < Distance * 0.75f)
-        {
-                FVector Anchor = StartPoint + FVector(Tangent.X, Tangent.Y, 0.f) * StartAdvance;
-                Anchor.Z = FMath::Lerp(StartPoint.Z, Target.Z, StartAdvance / Distance);
-                Anchor = AdjustForObstacles(Anchor);
-                if (!Anchor.Equals(StartPoint, 1.f))
-                {
-                        Seeds.Add(Anchor);
-                }
-        }
-
-        if (Distance > 900.f && Rng.FRand() < 0.65f)
-        {
-                const float MidAdvance = Distance * 0.5f;
-                const float SideStrength = FMath::Clamp(Distance * 0.25f, 160.f, 420.f);
-                const float SideSign = (Rng.FRand() < 0.5f) ? -1.f : 1.f;
-                FVector Mid = StartPoint + FVector(DirToTarget.X, DirToTarget.Y, 0.f) * MidAdvance;
-                Mid += FVector(Perp.X, Perp.Y, 0.f) * SideStrength * SideSign;
-                Mid.Z = FMath::Lerp(StartPoint.Z, Target.Z, 0.5f);
-                Mid = AdjustForObstacles(Mid);
-                if (!Mid.Equals(StartPoint, 5.f) && !Mid.Equals(Target, 5.f))
-                {
-                        Seeds.Add(Mid);
-                }
-        }
-
-        const float EndRetreat = FMath::Clamp(Distance * 0.18f, 150.f, 320.f);
-        if (EndRetreat > 1.f && EndRetreat < Distance * 0.75f)
-        {
-                FVector PreEnd = Target - FVector(DirToTarget.X, DirToTarget.Y, 0.f) * EndRetreat;
-                PreEnd.Z = FMath::Lerp(StartPoint.Z, Target.Z, FMath::Clamp((Distance - EndRetreat) / Distance, 0.f, 1.f));
-                PreEnd = AdjustForObstacles(PreEnd);
-                if (!PreEnd.Equals(Target, 1.f))
-                {
-                        Seeds.Add(PreEnd);
-                }
-        }
-
-        Seeds.Add(Target);
-
-        if (Seeds.Num() > 2)
-        {
-                TArray<FVector> Sorted;
-                Sorted.Reserve(Seeds.Num());
-                Sorted.Add(Seeds[0]);
-
-                TArray<FVector> Interior;
-                Interior.Reserve(Seeds.Num() - 2);
-                for (int32 Idx = 1; Idx < Seeds.Num() - 1; ++Idx)
-                {
-                        Interior.Add(Seeds[Idx]);
-                }
-
-                Interior.Sort([&](const FVector& L, const FVector& R)
-                {
-                        const FVector2D LVec(L.X - StartPoint.X, L.Y - StartPoint.Y);
-                        const FVector2D RVec(R.X - StartPoint.X, R.Y - StartPoint.Y);
-                        const float LProj = FVector2D::DotProduct(LVec, DirToTarget);
-                        const float RProj = FVector2D::DotProduct(RVec, DirToTarget);
-                        return LProj < RProj;
-                });
-
-                Sorted.Append(Interior);
-                Sorted.Add(Seeds.Last());
-                Seeds = MoveTemp(Sorted);
-        }
-
-        ResolveDetours(Seeds, Rng);
-        OutPoints = MoveTemp(Seeds);
 }
 
 bool ARoadSegment::SegmentBlockedByAny(const FVector& A, const FVector& B, const FEnvironmentObstacle*& OutObstacle, float& OutHitParam) const
@@ -671,7 +566,9 @@ void ARoadSegment::BuildOnePath(const TArray<FVector>& PathPointsWS)
 		}
 	}
 
-	// --- 2) Create the spline and feed dense points as WORLD points, make them curved ---
+        CachedSplineSamples.Append(DensePts);
+
+        // --- 2) Create the spline and feed dense points as WORLD points, make them curved ---
 	USplineComponent* Spline = NewObject<USplineComponent>(this, USplineComponent::StaticClass(), NAME_None, RF_Transactional);
 	Spline->SetMobility(EComponentMobility::Movable);
 	Spline->SetupAttachment(Root);
@@ -743,6 +640,47 @@ void ARoadSegment::BuildOnePath(const TArray<FVector>& PathPointsWS)
 		SMC->SetStartRoll(0.f);
 		SMC->SetEndRoll(0.f);
 	}
+}
+
+bool ARoadSegment::FindNearestSplineSample(const FVector& Point, FVector& OutPoint, float* OutDistSq) const
+{
+        if (CachedSplineSamples.IsEmpty())
+        {
+                if (OutDistSq)
+                {
+                        *OutDistSq = 0.f;
+                }
+                return false;
+        }
+
+        bool bFound = false;
+        float BestDistSq = FLT_MAX;
+        FVector BestPoint = FVector::ZeroVector;
+
+        for (const FVector& Sample : CachedSplineSamples)
+        {
+                const float Dx = Point.X - Sample.X;
+                const float Dy = Point.Y - Sample.Y;
+                const float DistSq = Dx * Dx + Dy * Dy;
+
+                if (DistSq < BestDistSq)
+                {
+                        BestDistSq = DistSq;
+                        BestPoint = Sample;
+                        bFound = true;
+                }
+        }
+
+        if (bFound)
+        {
+                OutPoint = BestPoint;
+                if (OutDistSq)
+                {
+                        *OutDistSq = BestDistSq;
+                }
+        }
+
+        return bFound;
 }
 
 bool ARoadSegment::FindNearestPointOnPathDetailed(const FVector& Point, const TArray<FVector>& Path, FVector& OutPoint, FVector& OutTangent,
@@ -882,15 +820,13 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
                 }
 
                 FVector ConnectionPoint = FVector::ZeroVector;
-                FVector ConnectionTangent = FVector::ZeroVector;
-                float DummyDistSq = 0.f;
-                if (!FindNearestPointOnPathDetailed(NodesWS[ExitIdx], MainPath, ConnectionPoint, ConnectionTangent, DummyDistSq))
+                if (!FindNearestSplineSample(NodesWS[ExitIdx], ConnectionPoint))
                 {
                         continue;
                 }
 
                 TArray<FVector> ExitPath;
-                BuildBranchPath(ConnectionPoint, ConnectionTangent, NodesWS[ExitIdx], Rng, ExitPath);
+                BuildBranchPath(ConnectionPoint, NodesWS[ExitIdx], Rng, ExitPath);
                 if (ExitPath.Num() < 2)
                 {
                         ExitPath.Reset();
@@ -907,39 +843,18 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
         {
                 const FVector PoiLocation = NodesWS[PoiIdx];
 
-                int32 BestPathIdx = INDEX_NONE;
-                FVector BestConnectionPoint = FVector::ZeroVector;
-                FVector BestConnectionTangent = FVector::ZeroVector;
-                float BestDistSq = FLT_MAX;
-
-                for (int32 PathIdx = 0; PathIdx < AllPaths.Num(); ++PathIdx)
-                {
-                        FVector CandidatePoint = FVector::ZeroVector;
-                        FVector CandidateTangent = FVector::ZeroVector;
-                        float DistSq = 0.f;
-                        if (FindNearestPointOnPathDetailed(PoiLocation, AllPaths[PathIdx], CandidatePoint, CandidateTangent, DistSq))
-                        {
-                                if (DistSq < BestDistSq)
-                                {
-                                        BestDistSq = DistSq;
-                                        BestPathIdx = PathIdx;
-                                        BestConnectionPoint = CandidatePoint;
-                                        BestConnectionTangent = CandidateTangent;
-                                }
-                        }
-                }
-
-                if (BestPathIdx == INDEX_NONE)
+                FVector ConnectionPoint = FVector::ZeroVector;
+                if (!FindNearestSplineSample(PoiLocation, ConnectionPoint))
                 {
                         continue;
                 }
 
                 TArray<FVector> PoiPath;
-                BuildBranchPath(BestConnectionPoint, BestConnectionTangent, PoiLocation, Rng, PoiPath);
+                BuildBranchPath(ConnectionPoint, PoiLocation, Rng, PoiPath);
                 if (PoiPath.Num() < 2)
                 {
                         PoiPath.Reset();
-                        PoiPath.Add(BestConnectionPoint);
+                        PoiPath.Add(ConnectionPoint);
                         PoiPath.Add(PoiLocation);
                 }
 

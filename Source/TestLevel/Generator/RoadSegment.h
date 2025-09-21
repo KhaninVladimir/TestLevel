@@ -38,7 +38,8 @@ protected:
         void MaybeAddShortcuts(const TArray<FVector2f>& PtsLocal, const FVector2f& H, TArray<FIntPoint>& InOutEdges);
 
         void BuildMainPath(const FVector& Start, const FVector& End, FRandomStream& Rng, TArray<FVector>& OutPoints);
-        void BuildBranchPath(const FVector& StartPoint, const FVector& StartTangent, const FVector& Target, FRandomStream& Rng, TArray<FVector>& OutPoints);
+        void BuildBranchPath(const FVector& StartPoint, const FVector& Target, FRandomStream& Rng, TArray<FVector>& OutPoints);
+        void BuildOrganicPath(const FVector& Start, const FVector& End, FRandomStream& Rng, float DeviationRatio, int32 MinAnchorCount, TArray<FVector>& OutPoints);
 
         void ResolveDetours(TArray<FVector>& Points, FRandomStream& Rng) const;
         bool InsertDetours(TArray<FVector>& Points, FRandomStream& Rng) const;
@@ -68,8 +69,10 @@ private:
 
         TArray<TArray<FVector>> BuiltPaths;
         TArray<FEnvironmentObstacle> CachedObstacles;
+        TArray<FVector> CachedSplineSamples;
         FVector2f CachedRoomHalfSize = FVector2f::ZeroVector;
 
         float ClearanceToRect(const FVector2f& P, const FVector2f& H);
+        bool FindNearestSplineSample(const FVector& Point, FVector& OutPoint, float* OutDistSq = nullptr) const;
 
 };
