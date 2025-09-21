@@ -19,11 +19,9 @@ ALocationRoom::ALocationRoom()
 
 	Root = CreateDefaultSubobject<USceneComponent>(TEXT("Root"));
 	SetRootComponent(Root);
-	Root->SetMobility(EComponentMobility::Static);
 
 	WallISM = CreateDefaultSubobject<UInstancedStaticMeshComponent>(TEXT("WallISM"));
 	WallISM->SetupAttachment(RootComponent);
-	WallISM->SetMobility(EComponentMobility::Static);
 }
 
 FVector2f ALocationRoom::GetHalfSize() const
