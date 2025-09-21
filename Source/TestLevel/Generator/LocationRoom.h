@@ -25,11 +25,13 @@ class TESTLEVEL_API ALocationRoom : public AActor
 {
 	GENERATED_BODY()
 public:
-	ALocationRoom();
+       ALocationRoom();
 
-	// Entry point to generate everything.
-	UFUNCTION(BlueprintCallable, Category = "WorldGen")
-	void Generate(const UWorldGenSettings* Settings, FRandomStream RndStream, AWorldStartMarker* StartMarker);
+
+        // Entry point to generate everything.
+        UFUNCTION(BlueprintCallable, Category = "WorldGen")
+        void Generate(const UWorldGenSettings* Settings, FRandomStream RndStream, AWorldStartMarker* StartMarker);
+
 
 protected:
 	UPROPERTY(VisibleAnywhere, BlueprintReadOnly)

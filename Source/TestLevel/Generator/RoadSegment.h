@@ -15,15 +15,29 @@ class TESTLEVEL_API ARoadSegment : public AActor
 {
 	GENERATED_BODY()
 
+
 public:
-	ARoadSegment();
+        ARoadSegment();
+
+        /** Build spline and spline-mesh representation from given world-space points. */
+        void BuildFromPoints(const TArray<FVector>& Points, UStaticMesh* Mesh, const FVector2f& Scale);
 
 	/** Build spline and spline-mesh representation from given world-space points. */
 	void BuildFromPoints(const TArray<FVector>& Points, UStaticMesh* Mesh, const FVector2f& Scale);
 
 protected:
-	UPROPERTY(VisibleAnywhere)
-	USceneComponent* Root;
+        UPROPERTY(VisibleAnywhere)
+        USceneComponent* Root;
+
+        UPROPERTY(VisibleAnywhere)
+        USplineComponent* Spline;
+
+private:
+        void ResetSplineMeshes();
+
+
+        UPROPERTY()
+        TArray<class USplineMeshComponent*> SplineMeshes;
 
 	UPROPERTY(VisibleAnywhere)
 	USplineComponent* Spline;
@@ -31,6 +45,5 @@ protected:
 private:
 	void ResetSplineMeshes();
 
-	UPROPERTY()
-	TArray<class USplineMeshComponent*> SplineMeshes;
+
 };
