@@ -46,10 +46,11 @@ protected:
 	FRandomStream Rng;
 
 	// Geometry helpers
-	FVector2f GetHalfSize() const;
-	FVector SideOriginWorld(ERoomSide Side) const;
-	FVector SideDirection(ERoomSide Side) const;
-	FVector LocalOut(ERoomSide) const;
+        FVector2f GetHalfSize() const;
+        FVector SideOriginWorld(ERoomSide Side) const;
+        FVector SideDirection(ERoomSide Side) const;
+        FVector SideDirectionWorld(ERoomSide Side) const;
+        FVector LocalOut(ERoomSide) const;
 	bool IsInsideRoom(const FVector& P) const;
 	bool SatisfiesMinDist(const FVector& P, const TArray<FVector>& Points, float MinDist) const;
 

@@ -51,19 +51,27 @@ FVector ALocationRoom::RoomLocalToWorld(const FVector& L) const
 
 FVector ALocationRoom::SideOriginWorld(ERoomSide Side) const
 {
-	const FVector2f H = GetHalfSize();
-	const FVector Center = GetRoomCenter();
+        const FVector2f H = GetHalfSize();
+        const FVector Center = GetRoomCenter();
+        const FQuat RoomQ = GetActorQuat();
+        const FVector LocalOffset = LocalOut(Side) * FVector(H.X, H.Y, 0.f);
 
-	return Center + LocalOut(Side) * FVector(H.X, H.Y, 0.f);
+        return Center + RoomQ.RotateVector(LocalOffset);
 }
 
 FVector ALocationRoom::SideDirection(ERoomSide Side) const
 {
-	if (Side == ERoomSide::North || Side == ERoomSide::South)
-	{
-		return FVector(1, 0, 0); // along X 
-	}
-	return FVector(0, 1, 0); // along Y
+        if (Side == ERoomSide::North || Side == ERoomSide::South)
+        {
+                return FVector(1, 0, 0); // along X
+        }
+        return FVector(0, 1, 0); // along Y
+}
+
+FVector ALocationRoom::SideDirectionWorld(ERoomSide Side) const
+{
+        const FQuat RoomQ = GetActorQuat();
+        return RoomQ.RotateVector(SideDirection(Side));
 }
 
 FVector ALocationRoom::LocalOut(ERoomSide Side) const
@@ -130,15 +138,15 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 	Entrance.HalfWidth = GenSettings->DoorwayHalfWidth;
 	Entrance.WorldTransform = GetActorTransform();
 
-	const FVector OutWS = RoomQ.RotateVector(LocalOut(Entrance.Side)).GetSafeNormal();
-	const FVector AlongWS = RoomQ.RotateVector(SideDirection(Entrance.Side)).GetSafeNormal();
+        const FVector OutWS = RoomQ.RotateVector(LocalOut(Entrance.Side)).GetSafeNormal();
+        const FVector AlongWS = SideDirectionWorld(Entrance.Side).GetSafeNormal();
 	const FVector2f H = GetHalfSize();
 	const float HalfSpanToSide = (Entrance.Side == ERoomSide::North || Entrance.Side == ERoomSide::South) ? H.Y : H.X;
 	RoomCenter = EntranceWorld - OutWS * HalfSpanToSide - AlongWS * Entrance.OffsetAlongSide;
 
 	// --- 3) Compute along-offset ON THAT SIDE (rotation-aware) ---
-	const FVector SideOriginNow = SideOriginWorld(EntranceSide);
-	const FVector AlongDir = SideDirection(EntranceSide);
+        const FVector SideOriginNow = SideOriginWorld(EntranceSide);
+        const FVector AlongDir = SideDirectionWorld(EntranceSide);
 
 	const float HalfSpan = (EntranceSide == ERoomSide::North || EntranceSide == ERoomSide::South)
 		? GenSettings->RoomSize.Width * 0.5f    // span along local X
@@ -213,14 +221,11 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 
 		D.HalfWidth = GenSettings->DoorwayHalfWidth;
 
-		FVector LocalOrigin = SideOriginWorld(D.Side);
-		FVector LocalAlong = SideDirection(D.Side);
+                const FVector DOriginWS = SideOriginWorld(D.Side);
+                const FVector DAlongWS = SideDirectionWorld(D.Side).GetSafeNormal();
+                const FVector CenterWS = DOriginWS + DAlongWS * D.OffsetAlongSide;
 
-		const FVector DOriginWS = Entrance.WorldTransform.TransformPosition(LocalOrigin);
-		const FVector DAlongWS = RoomQ.RotateVector(LocalAlong).GetSafeNormal();
-		const FVector CenterWS = DOriginWS + DAlongWS * D.OffsetAlongSide;
-
-		const FVector DOutWS = RoomQ.RotateVector(LocalOut(D.Side)).GetSafeNormal();
+                const FVector DOutWS = RoomQ.RotateVector(LocalOut(D.Side)).GetSafeNormal();
 		const FRotator RotWS = UKismetMathLibrary::MakeRotFromXZ(DOutWS, FVector::UpVector);
 		
 		D.WorldTransform = FTransform(RotWS, CenterWS);
@@ -288,8 +293,8 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
 					Openings.Add(E);
 			}
 
-			const FVector SideOrigin = SideOriginWorld(Side);
-			const FVector Along = SideDirection(Side);
+                        const FVector SideOrigin = SideOriginWorld(Side);
+                        const FVector Along = SideDirectionWorld(Side);
 
 			// Rotation for all segments on this side is constant
 			const FQuat SegmentRot = Along.Rotation().Quaternion();
@@ -361,8 +366,8 @@ void ALocationRoom::SpawnFinishMarkers(TArray<AWorldFinishMarker*>& OutMarkers)
 
 	for (const FDoorwaySpec& D : Exits)
 	{
-		const FVector Origin = SideOriginWorld(D.Side);
-		const FVector Along = SideDirection(D.Side);
+                const FVector Origin = SideOriginWorld(D.Side);
+                const FVector Along = SideDirectionWorld(D.Side);
 		const FVector P = Origin + Along * D.OffsetAlongSide;
 
 		if (AWorldFinishMarker* Marker = W->SpawnActor<AWorldFinishMarker>(AWorldFinishMarker::StaticClass(), D.WorldTransform))
