@@ -337,34 +337,47 @@ void ARoadSegment::BuildOnePath(const TArray<FVector>& PathPointsWS)
 	}
 }
 
-int32 ARoadSegment::FindNearestPointOnPath(const FVector& Point, const TArray<FVector>& Path)
+bool ARoadSegment::FindNearestPointOnPath(const FVector& Point, const TArray<FVector>& Path, FVector& OutPoint, float& OutDistSq) const
 {
-	int32 BestIdx = -1;
-	float BestDist = FLT_MAX;
+        if (Path.Num() < 2)
+        {
+                return false;
+        }
 
-	for (int32 i = 0; i < Path.Num() - 1; ++i)
-	{
-		// Find closest point on segment
-		const FVector A = Path[i];
-		const FVector B = Path[i + 1];
-		const FVector AB = B - A;
-		const float ABLen = AB.Size();
+        bool bFound = false;
+        float BestDistSq = FLT_MAX;
+        FVector BestPoint = FVector::ZeroVector;
 
-		if (ABLen < 0.01f) continue;
+        for (int32 i = 0; i < Path.Num() - 1; ++i)
+        {
+                const FVector A = Path[i];
+                const FVector B = Path[i + 1];
+                const FVector AB = B - A;
+                const float LenSq = AB.SizeSquared();
 
-		const FVector ABNorm = AB / ABLen;
-		const float t = FMath::Clamp(FVector::DotProduct(Point - A, ABNorm) / ABLen, 0.0f, 1.0f);
-		const FVector ClosestPoint = A + AB * t;
-		const float Dist = FVector::Dist(Point, ClosestPoint);
+                FVector Candidate = A;
+                if (LenSq > KINDA_SMALL_NUMBER)
+                {
+                        const float t = FMath::Clamp(FVector::DotProduct(Point - A, AB) / LenSq, 0.0f, 1.0f);
+                        Candidate = A + AB * t;
+                }
 
-		if (Dist < BestDist)
-		{
-			BestDist = Dist;
-			BestIdx = i;
-		}
-	}
+                const float DistSq = FVector::DistSquared(Point, Candidate);
+                if (DistSq < BestDistSq)
+                {
+                        BestDistSq = DistSq;
+                        BestPoint = Candidate;
+                        bFound = true;
+                }
+        }
 
-	return BestIdx;
+        if (bFound)
+        {
+                OutPoint = BestPoint;
+                OutDistSq = BestDistSq;
+        }
+
+        return bFound;
 }
 
 void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount, const FVector2f& RoomHalfSize, const UWorldGenSettings* Settings, FRandomStream& Rng, const TArray<FEnvironmentObstacle>& Obstacles)
@@ -414,21 +427,37 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
 		}
 	}
 
-	// 2. Build main road from entry to farthest exit
-	// For exits, we offset the approach point
-	const float ExitOffset = 400.0f; // N units offset from exit
+        // 2. Build main road from entry to farthest exit
+        const float ExitOffset = 400.0f; // Offset distance before snapping to the exit portal
 
-	// Calculate offset point for the farthest exit
-	FVector ExitDir = NodesWS[FarthestExitIdx] - NodesWS[EntryIdx];
-	ExitDir.Z = 0; // Keep it horizontal
-	ExitDir.Normalize();
-	FVector OffsetPoint = NodesWS[FarthestExitIdx] - ExitDir * ExitOffset;
-	OffsetPoint = AdjustForObstacles(OffsetPoint);
+        auto MakeExitApproachPoint = [&](const FVector& ExitLocation, const FVector& ReferencePoint)
+                {
+                        FVector Dir = ExitLocation - ReferencePoint;
+                        Dir.Z = 0.f;
 
-	// Build curved path to offset point
-	TArray<FVector> MainPath;
-	const float Scale = EdgeOffsetScale(PtsLocal[EntryIdx], PtsLocal[FarthestExitIdx], RoomHalfSize);
-        MakeCurvedPath(NodesWS[EntryIdx], OffsetPoint,
+                        const float Distance = Dir.Size();
+                        if (Distance <= KINDA_SMALL_NUMBER)
+                        {
+                                return AdjustForObstacles(ExitLocation);
+                        }
+
+                        Dir /= Distance;
+                        float DesiredOffset = ExitOffset;
+                        if (Distance <= ExitOffset)
+                        {
+                                DesiredOffset = Distance * 0.5f;
+                        }
+
+                        const FVector Candidate = ExitLocation - Dir * DesiredOffset;
+                        return AdjustForObstacles(Candidate);
+                };
+
+        const FVector MainOffsetPoint = MakeExitApproachPoint(NodesWS[FarthestExitIdx], NodesWS[EntryIdx]);
+
+        // Build curved path to offset point
+        TArray<FVector> MainPath;
+        const float Scale = EdgeOffsetScale(PtsLocal[EntryIdx], PtsLocal[FarthestExitIdx], RoomHalfSize);
+        MakeCurvedPath(NodesWS[EntryIdx], MainOffsetPoint,
                 static_cast<int32>(GenSettings->RoadMidpointCount),
                 GenSettings->RoadMaxPerpOffset * Scale,
                 GenSettings->RoadNoiseJitter * Scale,
@@ -437,8 +466,8 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
                 Rng,
                 MainPath);
 
-	// Add final segment to actual exit
-	MainPath.Add(NodesWS[FarthestExitIdx]);
+        // Add final segment to actual exit
+        MainPath.Add(NodesWS[FarthestExitIdx]);
 
 	AllPaths.Add(MainPath);
 	BuildOnePath(MainPath);
@@ -448,23 +477,20 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
 	{
 		if (i == FarthestExitIdx) continue; // Skip the one we already connected
 
-		// Find nearest point on main road
-		int32 NearestIdx = FindNearestPointOnPath(NodesWS[i], MainPath);
-		if (NearestIdx < 0) continue;
+                FVector ConnectionPoint = FVector::ZeroVector;
+                float DummyDistSq = 0.f;
+                if (!FindNearestPointOnPath(NodesWS[i], MainPath, ConnectionPoint, DummyDistSq))
+                {
+                        continue;
+                }
 
-		FVector ConnectionPoint = MainPath[NearestIdx];
+                // Calculate offset point for this exit
+                const FVector OffsetPointLocal = MakeExitApproachPoint(NodesWS[i], ConnectionPoint);
 
-		// Calculate offset point for this exit
-		FVector ExitDirLocal = NodesWS[i] - ConnectionPoint;
-		ExitDirLocal.Z = 0;
-		ExitDirLocal.Normalize();
-		FVector OffsetPointLocal = NodesWS[i] - ExitDirLocal * ExitOffset;
-		OffsetPointLocal = AdjustForObstacles(OffsetPointLocal);
-
-		// Build path from connection point to offset point
-		TArray<FVector> ExitPath;
-		const float ScaleLocal = EdgeOffsetScale(
-			FVector2f(ConnectionPoint.X, ConnectionPoint.Y),
+                // Build path from connection point to offset point
+                TArray<FVector> ExitPath;
+                const float ScaleLocal = EdgeOffsetScale(
+                        FVector2f(ConnectionPoint.X, ConnectionPoint.Y),
 			PtsLocal[i],
 			RoomHalfSize);
 
@@ -487,43 +513,25 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
 	// 4. Connect POIs to the nearest road
 	for (int32 i = FirstPOIIdx; i < NodesWS.Num(); ++i)
 	{
-		// Find nearest point on any existing path
-		int32 BestPathIdx = -1;
-		int32 BestSegmentIdx = -1;
-		float BestDist = FLT_MAX;
-		FVector BestConnectionPoint = FVector::ZeroVector;
+                // Find nearest point on any existing path
+                int32 BestPathIdx = -1;
+                float BestDistSq = FLT_MAX;
+                FVector BestConnectionPoint = FVector::ZeroVector;
 
-		for (int32 PathIdx = 0; PathIdx < AllPaths.Num(); ++PathIdx)
-		{
-			int32 SegIdx = FindNearestPointOnPath(NodesWS[i], AllPaths[PathIdx]);
-			if (SegIdx >= 0)
-			{
-				// Calculate actual closest point on segment
-				const FVector& A = AllPaths[PathIdx][SegIdx];
-				const FVector& B = AllPaths[PathIdx][FMath::Min(SegIdx + 1, AllPaths[PathIdx].Num() - 1)];
-				const FVector AB = B - A;
-				const float ABLen = AB.Size();
+                for (int32 PathIdx = 0; PathIdx < AllPaths.Num(); ++PathIdx)
+                {
+                        FVector CandidatePoint = FVector::ZeroVector;
+                        float DistSq = 0.f;
+                        if (FindNearestPointOnPath(NodesWS[i], AllPaths[PathIdx], CandidatePoint, DistSq) && DistSq < BestDistSq)
+                        {
+                                BestDistSq = DistSq;
+                                BestPathIdx = PathIdx;
+                                BestConnectionPoint = CandidatePoint;
+                        }
+                }
 
-				if (ABLen > 0.01f)
-				{
-					const FVector ABNorm = AB / ABLen;
-					const float t = FMath::Clamp(FVector::DotProduct(NodesWS[i] - A, ABNorm) / ABLen, 0.0f, 1.0f);
-					const FVector ClosestPoint = A + AB * t;
-					const float Dist = FVector::Dist(NodesWS[i], ClosestPoint);
-
-					if (Dist < BestDist)
-					{
-						BestDist = Dist;
-						BestPathIdx = PathIdx;
-						BestSegmentIdx = SegIdx;
-						BestConnectionPoint = ClosestPoint;
-					}
-				}
-			}
-		}
-
-		if (BestPathIdx >= 0)
-		{
+                if (BestPathIdx >= 0)
+                {
 			// Build path from connection point to POI
 			TArray<FVector> POIPath;
 			const float ScalePOI = EdgeOffsetScale(
