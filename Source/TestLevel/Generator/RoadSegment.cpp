@@ -586,52 +586,63 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
                         DirToPOI.Z = 0.f;
 
                         const float ToPOILength = FVector2D(DirToPOI.X, DirToPOI.Y).Size();
-                        FVector DirToPOINorm = DirToPOI;
-                        if (!DirToPOINorm.Normalize())
+                        if (ToPOILength <= KINDA_SMALL_NUMBER)
                         {
-                                DirToPOINorm = FVector::ZeroVector;
+                                TArray<FVector> DirectPath;
+                                DirectPath.Add(BestConnectionPoint);
+                                DirectPath.Add(NodesWS[i]);
+                                AllPaths.Add(DirectPath);
+                                BuildOnePath(DirectPath);
+                                continue;
                         }
 
-                        FVector BranchDir = DirToPOINorm;
                         FVector Tangent2D = FVector(BestConnectionTangent.X, BestConnectionTangent.Y, 0.f).GetSafeNormal();
-                        if (BranchDir.IsNearlyZero())
+                        FVector BranchForward = DirToPOI;
+                        if (!BranchForward.Normalize())
                         {
-                                if (!Tangent2D.IsNearlyZero())
-                                {
-                                        BranchDir = FVector(-Tangent2D.Y, Tangent2D.X, 0.f);
-                                }
-                                else
-                                {
-                                        BranchDir = FVector::RightVector;
-                                }
+                                BranchForward = !Tangent2D.IsNearlyZero() ? Tangent2D : FVector::ForwardVector;
+                        }
+                        if (!BranchForward.Normalize())
+                        {
+                                BranchForward = FVector::ForwardVector;
                         }
 
+                        float KickBase = FMath::Clamp(ToPOILength * 0.35f, 120.f, 600.f);
+                        float Kick = KickBase * FMath::Max(0.35f, ScalePOI);
+                        const float MaxKick = ToPOILength * 0.6f;
+                        const float MinKick = ToPOILength * 0.25f;
+                        if (MaxKick > KINDA_SMALL_NUMBER)
+                        {
+                                Kick = FMath::Clamp(Kick, MinKick, MaxKick);
+                        }
+                        else
+                        {
+                                Kick = 0.f;
+                        }
+
+                        FVector BranchSide = FVector(-BranchForward.Y, BranchForward.X, 0.f).GetSafeNormal();
+                        float SideSign = 0.f;
                         if (!Tangent2D.IsNearlyZero())
                         {
-                                const float Alignment = FMath::Abs(FVector::DotProduct(BranchDir, Tangent2D));
-                                if (Alignment > 0.55f)
+                                const float CrossZ = FVector::CrossProduct(Tangent2D, BranchForward).Z;
+                                if (!FMath::IsNearlyZero(CrossZ))
                                 {
-                                        BranchDir -= Tangent2D * FVector::DotProduct(BranchDir, Tangent2D);
-                                        if (!BranchDir.Normalize())
-                                        {
-                                                BranchDir = FVector(-Tangent2D.Y, Tangent2D.X, 0.f);
-                                        }
-                                }
-
-                                if (!DirToPOINorm.IsNearlyZero() && FVector::DotProduct(BranchDir, DirToPOINorm) < 0.f)
-                                {
-                                        BranchDir *= -1.f;
+                                        SideSign = FMath::Sign(CrossZ);
                                 }
                         }
-
-                        if (!BranchDir.Normalize())
+                        if (FMath::Abs(SideSign) < KINDA_SMALL_NUMBER)
                         {
-                                BranchDir = FVector::RightVector;
+                                SideSign = (Rng.FRand() < 0.5f) ? 1.f : -1.f;
                         }
 
-                        const float KickBase = FMath::Clamp(ToPOILength * 0.35f, 200.f, 700.f);
-                        const float Kick = FMath::Max(180.f, KickBase * FMath::Max(0.35f, ScalePOI));
-                        FVector BranchStart = BestConnectionPoint + BranchDir * Kick;
+                        const float LateralScale = Kick * 0.35f * FMath::Clamp(ScalePOI, 0.2f, 1.f);
+                        FVector LateralOffset = BranchSide * LateralScale * SideSign;
+                        if (BranchSide.IsNearlyZero())
+                        {
+                                LateralOffset = FVector::ZeroVector;
+                        }
+
+                        FVector BranchStart = BestConnectionPoint + BranchForward * Kick + LateralOffset;
                         BranchStart = AdjustForObstacles(BranchStart);
 
                         TArray<FVector> POIPath;

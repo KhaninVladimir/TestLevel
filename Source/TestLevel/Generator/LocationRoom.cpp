@@ -110,20 +110,79 @@ float ALocationRoom::DistanceToRoads(const FVector& P) const
                 return RoadNetwork->DistanceToRoads(P);
         }
 
-		return FLT_MAX;
+        return FLT_MAX;
+}
+
+void ALocationRoom::DestroyEnvironment()
+{
+        for (UInstancedStaticMeshComponent* Comp : EnvironmentComponents)
+        {
+                if (Comp)
+                {
+                        Comp->DestroyComponent();
+                }
+        }
+
+        EnvironmentComponents.Reset();
+        EnvironmentObstacles.Reset();
+}
+
+void ALocationRoom::CleanupGeneratedContent()
+{
+        for (AWorldFinishMarker* Marker : FinishMarkers)
+        {
+                if (Marker && !Marker->IsPendingKillPending())
+                {
+                        Marker->Destroy();
+                }
+        }
+        FinishMarkers.Reset();
+
+        for (AActor* PoiActor : POIs)
+        {
+                if (PoiActor && !PoiActor->IsPendingKillPending())
+                {
+                        PoiActor->Destroy();
+                }
+        }
+        POIs.Reset();
+
+        for (AActor* Monster : SpawnedMonsters)
+        {
+                if (Monster && !Monster->IsPendingKillPending())
+                {
+                        Monster->Destroy();
+                }
+        }
+        SpawnedMonsters.Reset();
+
+        DestroyEnvironment();
+
+        if (RoadNetwork && !RoadNetwork->IsPendingKillPending())
+        {
+                RoadNetwork->Destroy();
+        }
+        RoadNetwork = nullptr;
+
+        Exits.Reset();
+        RoadPoint.Reset();
+        EntranceLocation = FVector::ZeroVector;
+        RoomCenter = FVector::ZeroVector;
 }
 
 // ===== Generation entry =====
 
 void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarker* EntranceMarker, FRandomStream RndStream)
 {
-	check(Settings && EntranceMarker);
-	GenSettings = Settings;
-	Rng = RndStream;
+        check(Settings && EntranceMarker);
+        GenSettings = Settings;
+        Rng = RndStream;
 
-	// Align room transform with the provided marker so that the actor's transform becomes
-	// the authoritative entry transform for the whole location (designers rotate the actor).
-	SetActorTransform(EntranceMarker->GetActorTransform());
+        CleanupGeneratedContent();
+
+        // Align room transform with the provided marker so that the actor's transform becomes
+        // the authoritative entry transform for the whole location (designers rotate the actor).
+        SetActorTransform(EntranceMarker->GetActorTransform());
 
 	// Room transform (rotation-aware math)
 	const FTransform EntryTransform = GetActorTransform();
@@ -258,11 +317,10 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 	// --- 5) Build walls (rotation-aware inside the function) ---
 	BuildWallsWithOpenings(Entrance);
 
-	// --- 6) Exit markers ---
-	TArray<AWorldFinishMarker*> FinishMarkers;
-	FinishMarkers.Empty();
-	FinishMarkers.Reserve(Exits.Num());
-	SpawnFinishMarkers(FinishMarkers);
+        // --- 6) Exit markers ---
+        FinishMarkers.Empty();
+        FinishMarkers.Reserve(Exits.Num());
+        SpawnFinishMarkers(FinishMarkers);
 
 	// --- 7) Targets (rotation-aware world positions) ---
 	RoadPoint.Empty();
@@ -276,14 +334,14 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 	// --- 8) POIs / Monsters ---
 	POIs.Empty();
 	POIs.Reserve(GenSettings->POICountRange.Max); // верхняя граница — разумная эвристика
-	SpawnPOIs(EntranceLocation, POIs);
+        SpawnPOIs(EntranceLocation, POIs);
 
-	SpawnEnvironment();
-	SpawnRoads();
+        SpawnEnvironment();
+        SpawnRoads();
 
-	TArray<AActor*> Monsters;
-	Monsters.Reserve(GenSettings->MonsterPackCountRange.Max * 4); // грубая эвристика
-	SpawnMonsters(Monsters);
+        SpawnedMonsters.Empty();
+        SpawnedMonsters.Reserve(GenSettings->MonsterPackCountRange.Max * 4); // грубая эвристика
+        SpawnMonsters(SpawnedMonsters);
 }
 
 
@@ -478,22 +536,14 @@ void ALocationRoom::SpawnPOIs(const FVector& EntranceWorld, TArray<AActor*>& Out
 
 void ALocationRoom::SpawnEnvironment()
 {
-	if (!GenSettings)
-	{
-		return;
-	}
+        if (!GenSettings)
+        {
+                return;
+        }
 
-	for (UInstancedStaticMeshComponent* Comp : EnvironmentComponents)
-	{
-		if (Comp)
-		{
-			Comp->DestroyComponent();
-		}
-	}
-	EnvironmentComponents.Reset();
-	EnvironmentObstacles.Reset();
+        DestroyEnvironment();
 
-	const TArray<FEnvironmentSpawnEntry>& Entries = GenSettings->EnvironmentMeshes;
+        const TArray<FEnvironmentSpawnEntry>& Entries = GenSettings->EnvironmentMeshes;
 	if (Entries.Num() == 0)
 	{
 		return;

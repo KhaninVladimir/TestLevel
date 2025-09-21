@@ -64,29 +64,38 @@ protected:
 	void SpawnFinishMarkers(TArray<AWorldFinishMarker*>& OutMarkers);
 	void SpawnPOIs(const FVector& EntranceWorld, TArray<AActor*>& OutPOIs);
 	void SpawnEnvironment();
-	void SpawnMonsters(TArray<AActor*>& OutMonsters);
-	void SpawnRoads();
+        void SpawnMonsters(TArray<AActor*>& OutMonsters);
+        void SpawnRoads();
 
-	FORCEINLINE FVector GetRoomCenter() const;
-	FORCEINLINE FTransform GetRoomTransform() const;
-	FORCEINLINE FVector WorldToRoomLocal(const FVector& P) const;
-	FORCEINLINE FVector RoomLocalToWorld(const FVector& L) const;
+        FORCEINLINE FVector GetRoomCenter() const;
+        FORCEINLINE FTransform GetRoomTransform() const;
+        FORCEINLINE FVector WorldToRoomLocal(const FVector& P) const;
+        FORCEINLINE FVector RoomLocalToWorld(const FVector& L) const;
+
+        void CleanupGeneratedContent();
+        void DestroyEnvironment();
 
 private:
-	UPROPERTY(Transient)
-	TArray<FDoorwaySpec> Exits;
+        UPROPERTY(Transient)
+        TArray<FDoorwaySpec> Exits;
 
 	UPROPERTY(Transient)
 	TArray<FVector> RoadPoint;
 
-	UPROPERTY(Transient)
-	TArray<AActor*> POIs;
+        UPROPERTY(Transient)
+        TArray<AActor*> POIs;
 
-	UPROPERTY(Transient)
-	FVector EntranceLocation = FVector::ZeroVector;
+        UPROPERTY(Transient)
+        TArray<AActor*> SpawnedMonsters;
 
-	UPROPERTY(Transient)
-	TArray<FEnvironmentObstacle> EnvironmentObstacles;
+        UPROPERTY(Transient)
+        TArray<AWorldFinishMarker*> FinishMarkers;
+
+        UPROPERTY(Transient)
+        FVector EntranceLocation = FVector::ZeroVector;
+
+        UPROPERTY(Transient)
+        TArray<FEnvironmentObstacle> EnvironmentObstacles;
 
 	UPROPERTY(Transient)
 	TArray<UInstancedStaticMeshComponent*> EnvironmentComponents;
