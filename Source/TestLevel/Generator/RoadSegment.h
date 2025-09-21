@@ -33,29 +33,19 @@ protected:
         bool FindNearestPointOnPathDetailed(const FVector& Point, const TArray<FVector>& Path, FVector& OutPoint, FVector& OutTangent,
                 float& OutDistSq, int32* OutSegmentIdx = nullptr, float* OutSegmentT = nullptr) const;
 
-	// Utility used by BuildNetwork
-	void ComputeMST_Prim(const TArray<FVector2f>& PtsLocal, TArray<FIntPoint>& OutEdges);
-	void MaybeAddShortcuts(const TArray<FVector2f>& PtsLocal, const FVector2f& H, TArray<FIntPoint>& InOutEdges);
+        // Utility used by BuildNetwork
+        void ComputeMST_Prim(const TArray<FVector2f>& PtsLocal, TArray<FIntPoint>& OutEdges);
+        void MaybeAddShortcuts(const TArray<FVector2f>& PtsLocal, const FVector2f& H, TArray<FIntPoint>& InOutEdges);
 
-	// Generate naturally-curved path points for the edge (A,B)
-        void MakeCurvedPath(const FVector& A, const FVector& B,
-                int32 MidCount,
-                float MaxPerp,
-                float NoiseJitter,
-                float TangentStrength,
-                float BaselineCurvature,
-                FRandomStream& Rng,
-                TArray<FVector>& OutPoints);
+        void BuildMainPath(const FVector& Start, const FVector& End, FRandomStream& Rng, TArray<FVector>& OutPoints);
+        void BuildBranchPath(const FVector& StartPoint, const FVector& StartTangent, const FVector& Target, FRandomStream& Rng, TArray<FVector>& OutPoints);
 
-        void BuildPOIBranchPath(const FVector& ConnectionPoint,
-                const FVector& ConnectionTangent,
-                const FVector& POILocation,
-                float ScalePOI,
-                FRandomStream& Rng,
-                TArray<FVector>& OutPoints);
-
-        FVector EvaluateHermite(const FVector& P0, const FVector& T0, const FVector& P1, const FVector& T1, float T) const;
-        FVector ClampBranchDeviation(const FVector& ConnectionPoint, const FVector& Forward, float MaxDistance, const FVector& Candidate) const;
+        void ResolveDetours(TArray<FVector>& Points, FRandomStream& Rng) const;
+        bool InsertDetours(TArray<FVector>& Points, FRandomStream& Rng) const;
+        bool SegmentBlockedByAny(const FVector& A, const FVector& B, const FEnvironmentObstacle*& OutObstacle, float& OutHitParam) const;
+        FVector MakeDetourPoint(const FVector& A, const FVector& B, const FEnvironmentObstacle& Obstacle, float SegmentParam, FRandomStream& Rng) const;
+        void RelaxPolyline(TArray<FVector>& Points) const;
+        void RemoveRedundantPoints(TArray<FVector>& Points) const;
 
         // Compute per-edge offset scale so paths near walls wiggle less
         float EdgeOffsetScale(const FVector2f& A_L, const FVector2f& B_L, const FVector2f& H);
