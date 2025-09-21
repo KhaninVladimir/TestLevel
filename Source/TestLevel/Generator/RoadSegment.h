@@ -1,24 +1,36 @@
-// Fill out your copyright notice in the Description page of Project Settings.
+// Copyright notice placeholder
 
 #pragma once
 
 #include "CoreMinimal.h"
 #include "GameFramework/Actor.h"
-#include "WorldGenTypes.h"
-#include "Components/SplineMeshComponent.h"
-#include "WorldGenSettings.h"
+
 #include "RoadSegment.generated.h"
+
+class USplineComponent;
+class UStaticMesh;
 
 UCLASS()
 class TESTLEVEL_API ARoadSegment : public AActor
 {
-	GENERATED_BODY()
-	
+        GENERATED_BODY()
+
 public:
-	ARoadSegment();
+        ARoadSegment();
+
+        /** Build spline and spline-mesh representation from given world-space points. */
+        void BuildFromPoints(const TArray<FVector>& Points, UStaticMesh* Mesh, const FVector2f& Scale);
 
 protected:
-	UPROPERTY(VisibleAnywhere)
-	USceneComponent* Root;
+        UPROPERTY(VisibleAnywhere)
+        USceneComponent* Root;
 
+        UPROPERTY(VisibleAnywhere)
+        USplineComponent* Spline;
+
+private:
+        void ResetSplineMeshes();
+
+        UPROPERTY()
+        TArray<class USplineMeshComponent*> SplineMeshes;
 };
