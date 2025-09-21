@@ -164,7 +164,149 @@ void ARoadSegment::MakeCurvedPath(const FVector& A, const FVector& B,
 
         OutPoints.Add(B);
 
-	// (Tangents are set when we build spline meshes from these points)
+        // (Tangents are set when we build spline meshes from these points)
+}
+
+FVector ARoadSegment::EvaluateHermite(const FVector& P0, const FVector& T0, const FVector& P1, const FVector& T1, float T) const
+{
+        const float T2 = T * T;
+        const float T3 = T2 * T;
+
+        const float H00 = 2.f * T3 - 3.f * T2 + 1.f;
+        const float H10 = T3 - 2.f * T2 + T;
+        const float H01 = -2.f * T3 + 3.f * T2;
+        const float H11 = T3 - T2;
+
+        return H00 * P0 + H10 * T0 + H01 * P1 + H11 * T1;
+}
+
+FVector ARoadSegment::ClampBranchDeviation(const FVector& ConnectionPoint, const FVector& Forward, float MaxDistance, const FVector& Candidate) const
+{
+        FVector Dir2D = FVector(Forward.X, Forward.Y, 0.f);
+        if (!Dir2D.Normalize())
+        {
+                return ClampToRoomBounds(Candidate);
+        }
+
+        FVector Rel = Candidate - ConnectionPoint;
+        const float ForwardDist = FVector::DotProduct(Rel, Dir2D);
+        const float MinForward = 0.f;
+        const float MaxForward = FMath::Max(10.f, MaxDistance * 0.98f);
+        const float ClampedForward = FMath::Clamp(ForwardDist, MinForward, MaxForward);
+
+        FVector Side = Rel - Dir2D * ClampedForward;
+        const float MaxSide = FMath::Clamp(MaxDistance * 0.4f, 120.f, 900.f);
+        const float SideLenSq = Side.SizeSquared();
+        if (SideLenSq > MaxSide * MaxSide && SideLenSq > KINDA_SMALL_NUMBER)
+        {
+                const float Scale = MaxSide / FMath::Sqrt(SideLenSq);
+                Side *= Scale;
+        }
+
+        FVector Result = ConnectionPoint + Dir2D * ClampedForward + Side;
+        Result.Z = Candidate.Z;
+        return ClampToRoomBounds(Result);
+}
+
+void ARoadSegment::BuildPOIBranchPath(const FVector& ConnectionPoint,
+        const FVector& ConnectionTangent,
+        const FVector& POILocation,
+        float ScalePOI,
+        FRandomStream& Rng,
+        TArray<FVector>& OutPoints)
+{
+        OutPoints.Reset();
+        OutPoints.Add(ConnectionPoint);
+
+        FVector DirToPOI = POILocation - ConnectionPoint;
+        DirToPOI.Z = 0.f;
+
+        const float ToPOILength = FVector2D(DirToPOI.X, DirToPOI.Y).Size();
+        if (ToPOILength <= KINDA_SMALL_NUMBER)
+        {
+                OutPoints.Add(POILocation);
+                return;
+        }
+
+        FVector Forward = FVector(DirToPOI.X, DirToPOI.Y, 0.f);
+        Forward.Normalize();
+
+        FVector RoadDir = FVector(ConnectionTangent.X, ConnectionTangent.Y, 0.f);
+        if (!RoadDir.Normalize())
+        {
+                RoadDir = Forward;
+        }
+
+        FVector SideDir = FVector(-RoadDir.Y, RoadDir.X, 0.f);
+        if (!SideDir.Normalize())
+        {
+                SideDir = FVector::ZeroVector;
+        }
+
+        float SideSign = 0.f;
+        const float CrossZ = FVector::CrossProduct(RoadDir, Forward).Z;
+        if (!FMath::IsNearlyZero(CrossZ))
+        {
+                SideSign = FMath::Sign(CrossZ);
+        }
+        else if (!SideDir.IsNearlyZero())
+        {
+                SideSign = (Rng.FRand() < 0.5f) ? 1.f : -1.f;
+        }
+
+        float SideStrength = 0.f;
+        if (!SideDir.IsNearlyZero())
+        {
+                const float SideScale = FMath::Clamp(ScalePOI, 0.25f, 1.f);
+                SideStrength = ToPOILength * 0.25f * SideScale;
+        }
+
+        FVector StartSideOffset = SideDir * SideStrength * SideSign;
+        if (!SideDir.IsNearlyZero())
+        {
+                const float Jitter = (Rng.FRand() - 0.5f) * 0.3f; // -0.15..0.15
+                StartSideOffset += SideDir * SideStrength * Jitter;
+        }
+
+        const float Blend = 0.6f;
+        FVector StartDir = RoadDir * Blend + Forward * (1.f - Blend);
+        if (!StartDir.Normalize())
+        {
+                StartDir = Forward;
+        }
+        else if (FVector::DotProduct(StartDir, Forward) < 0.1f)
+        {
+                StartDir = Forward;
+        }
+
+        float LeadDistance = FMath::Clamp(ToPOILength * 0.35f, 180.f, 520.f);
+        LeadDistance *= FMath::Lerp(0.65f, 1.15f, FMath::Clamp(ScalePOI, 0.2f, 1.f));
+        FVector StartTangent = StartDir * LeadDistance + StartSideOffset;
+        StartTangent = StartTangent.GetClampedToMaxSize(ToPOILength * 0.6f);
+
+        const float ForwardComponent = FVector::DotProduct(StartTangent, Forward);
+        const float MinForwardComponent = ToPOILength * 0.18f;
+        if (ForwardComponent < MinForwardComponent)
+        {
+                StartTangent += Forward * (MinForwardComponent - ForwardComponent);
+        }
+        StartTangent = StartTangent.GetClampedToMaxSize(ToPOILength * 0.6f);
+
+        FVector EndDir = Forward;
+        FVector EndTangent = EndDir * FMath::Clamp(ToPOILength * 0.3f, 140.f, 480.f);
+
+        const int32 MidCountRef = GenSettings ? static_cast<int32>(GenSettings->RoadMidpointCount) : 0;
+        const int32 NumSegments = FMath::Clamp(1 + MidCountRef / 3, 2, 6);
+        for (int32 Step = 1; Step < NumSegments; ++Step)
+        {
+                const float T = static_cast<float>(Step) / static_cast<float>(NumSegments);
+                FVector Candidate = EvaluateHermite(ConnectionPoint, StartTangent, POILocation, EndTangent, T);
+                Candidate = AdjustForObstacles(Candidate);
+                Candidate = ClampBranchDeviation(ConnectionPoint, Forward, ToPOILength, Candidate);
+                OutPoints.Add(Candidate);
+        }
+
+        OutPoints.Add(POILocation);
 }
 
 FVector ARoadSegment::AdjustForObstacles(const FVector& Point) const
@@ -582,83 +724,19 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
                                 PtsLocal[i],
                                 RoomHalfSize);
 
-                        FVector DirToPOI = NodesWS[i] - BestConnectionPoint;
-                        DirToPOI.Z = 0.f;
-
-                        const float ToPOILength = FVector2D(DirToPOI.X, DirToPOI.Y).Size();
-                        if (ToPOILength <= KINDA_SMALL_NUMBER)
-                        {
-                                TArray<FVector> DirectPath;
-                                DirectPath.Add(BestConnectionPoint);
-                                DirectPath.Add(NodesWS[i]);
-                                AllPaths.Add(DirectPath);
-                                BuildOnePath(DirectPath);
-                                continue;
-                        }
-
-                        FVector Tangent2D = FVector(BestConnectionTangent.X, BestConnectionTangent.Y, 0.f).GetSafeNormal();
-                        FVector BranchForward = DirToPOI;
-                        if (!BranchForward.Normalize())
-                        {
-                                BranchForward = !Tangent2D.IsNearlyZero() ? Tangent2D : FVector::ForwardVector;
-                        }
-                        if (!BranchForward.Normalize())
-                        {
-                                BranchForward = FVector::ForwardVector;
-                        }
-
-                        float KickBase = FMath::Clamp(ToPOILength * 0.35f, 120.f, 600.f);
-                        float Kick = KickBase * FMath::Max(0.35f, ScalePOI);
-                        const float MaxKick = ToPOILength * 0.6f;
-                        const float MinKick = ToPOILength * 0.25f;
-                        if (MaxKick > KINDA_SMALL_NUMBER)
-                        {
-                                Kick = FMath::Clamp(Kick, MinKick, MaxKick);
-                        }
-                        else
-                        {
-                                Kick = 0.f;
-                        }
-
-                        FVector BranchSide = FVector(-BranchForward.Y, BranchForward.X, 0.f).GetSafeNormal();
-                        float SideSign = 0.f;
-                        if (!Tangent2D.IsNearlyZero())
-                        {
-                                const float CrossZ = FVector::CrossProduct(Tangent2D, BranchForward).Z;
-                                if (!FMath::IsNearlyZero(CrossZ))
-                                {
-                                        SideSign = FMath::Sign(CrossZ);
-                                }
-                        }
-                        if (FMath::Abs(SideSign) < KINDA_SMALL_NUMBER)
-                        {
-                                SideSign = (Rng.FRand() < 0.5f) ? 1.f : -1.f;
-                        }
-
-                        const float LateralScale = Kick * 0.35f * FMath::Clamp(ScalePOI, 0.2f, 1.f);
-                        FVector LateralOffset = BranchSide * LateralScale * SideSign;
-                        if (BranchSide.IsNearlyZero())
-                        {
-                                LateralOffset = FVector::ZeroVector;
-                        }
-
-                        FVector BranchStart = BestConnectionPoint + BranchForward * Kick + LateralOffset;
-                        BranchStart = AdjustForObstacles(BranchStart);
-
                         TArray<FVector> POIPath;
-                        MakeCurvedPath(BranchStart, NodesWS[i],
-                                FMath::Max(1, static_cast<int32>(GenSettings->RoadMidpointCount) / 3), // Even fewer midpoints for POI connections
-                                GenSettings->RoadMaxPerpOffset * ScalePOI * 0.5f, // Less deviation for POI branches
-                                GenSettings->RoadNoiseJitter * ScalePOI * 0.5f,
-                                GenSettings->RoadTangentStrength,
-                                GenSettings->RoadBaselineCurvature * ScalePOI * 0.5f,
+                        BuildPOIBranchPath(BestConnectionPoint,
+                                BestConnectionTangent,
+                                NodesWS[i],
+                                ScalePOI,
                                 Rng,
                                 POIPath);
 
-                        POIPath.Insert(BestConnectionPoint, 0);
-
-                        AllPaths.Add(POIPath);
-                        BuildOnePath(POIPath);
+                        if (POIPath.Num() >= 2)
+                        {
+                                AllPaths.Add(POIPath);
+                                BuildOnePath(POIPath);
+                        }
                 }
         }
 
