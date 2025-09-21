@@ -5,7 +5,6 @@
 #include "Components/SplineComponent.h"
 #include "Components/SplineMeshComponent.h"
 #include "Kismet/KismetMathLibrary.h"
-#include "Templates/NumericLimits.h"
 
 ARoadSegment::ARoadSegment()
 {
@@ -406,7 +405,7 @@ void ARoadSegment::BuildNetwork(const TArray<FVector>& NodesWS, int32 ExitCount,
 		int32 BestPathIdx = -1;
 		int32 BestSegmentIdx = -1;
 		float BestDist = FLT_MAX;
-		FVector BestConnectionPoint;
+		FVector BestConnectionPoint = FVector::ZeroVector;
 
 		for (int32 PathIdx = 0; PathIdx < AllPaths.Num(); ++PathIdx)
 		{
@@ -467,11 +466,11 @@ float ARoadSegment::DistanceToRoads(const FVector& Point) const
 {
         if (BuiltPaths.IsEmpty())
         {
-                return TNumericLimits<float>::Max();
+			return FLT_MAX;
         }
 
         const FVector2D P2(Point.X, Point.Y);
-        float Best = TNumericLimits<float>::Max();
+        float Best = FLT_MAX;
 
         for (const TArray<FVector>& Path : BuiltPaths)
         {

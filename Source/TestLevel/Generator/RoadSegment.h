@@ -61,7 +61,6 @@ private:
         UPROPERTY()
         const UWorldGenSettings* GenSettings = nullptr;
 
-        UPROPERTY(Transient)
         TArray<TArray<FVector>> BuiltPaths;
 
         float ClearanceToRect(const FVector2f& P, const FVector2f& H);

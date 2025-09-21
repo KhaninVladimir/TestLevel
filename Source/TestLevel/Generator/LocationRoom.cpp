@@ -9,7 +9,6 @@
 #include "Components/InstancedStaticMeshComponent.h"
 #include "Kismet/KismetMathLibrary.h"
 #include "Engine/World.h"
-#include "Templates/NumericLimits.h"
 
 // ===== Helpers: coordinate system =====
 
@@ -110,7 +109,7 @@ float ALocationRoom::DistanceToRoads(const FVector& P) const
                 return RoadNetwork->DistanceToRoads(P);
         }
 
-        return TNumericLimits<float>::Max();
+		return FLT_MAX;
 }
 
 // ===== Generation entry =====
@@ -321,7 +320,7 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
                                         T.SetLocation(SideOrigin + Along * CenterOff);
                                         T.SetRotation(SegmentRot);
                                         T.SetScale3D(FVector(1, 1, 1));
-                                        WallISM->AddInstanceWorldSpace(T);
+                                        WallISM->AddInstance(T, true);
 				}
 				return;
 			}
@@ -346,7 +345,7 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
                                 T.SetLocation(SideOrigin + Along * CenterOff);
                                 T.SetRotation(SegmentRot);
                                 T.SetScale3D(FVector(1, 1, 1));
-                                WallISM->AddInstanceWorldSpace(T);
+                                WallISM->AddInstance(T, true);
 			}
 		};
 
