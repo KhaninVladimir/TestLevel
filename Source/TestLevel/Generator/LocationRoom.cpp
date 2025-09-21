@@ -293,11 +293,11 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
 					Openings.Add(E);
 			}
 
-                        const FVector SideOrigin = SideOriginWorld(Side);
-                        const FVector Along = SideDirectionWorld(Side).GetSafeNormal();
+      const FVector SideOrigin = SideOriginWorld(Side);
+      сonst FVector Along = SideDirectionWorld(Side).GetSafeNormal();
 
-                        // Rotation for all segments on this side is constant
-                        const FQuat SegmentRot = Along.Rotation().Quaternion();
+       // Rotation for all segments on this side is constant
+       const FQuat SegmentRot = Along.Rotation().Quaternion();
 
 			// Fast path: no openings → add all segments
 			if (Openings.Num() == 0)
