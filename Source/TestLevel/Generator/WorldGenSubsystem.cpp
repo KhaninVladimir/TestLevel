@@ -43,6 +43,6 @@ ALocationRoom* UWorldGenSubsystem::CreateLocation(const UWorldGenSettings* Setti
 	UGameplayStatics::FinishSpawningActor(Room, RoomXform);
 
 	// Generate content
-	Room->Generate(Settings, RndStream);
-	return Room;
+        Room->Generate(Settings, RndStream, Start);
+        return Room;
 }
