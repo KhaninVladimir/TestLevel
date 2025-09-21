@@ -1,5 +1,3 @@
-// Fill out your copyright notice in the Description page of Project Settings.
-
 #pragma once
 
 #include "CoreMinimal.h"
@@ -15,7 +13,7 @@ UCLASS()
 class TESTLEVEL_API ARoadSegment : public AActor
 {
 	GENERATED_BODY()
-	
+
 public:
 	ARoadSegment();
 
@@ -30,5 +28,22 @@ protected:
 	UPROPERTY(VisibleAnywhere)
 	USceneComponent* Root;
 
+private:
+	// Runtime components used to render spline roads.
+	UPROPERTY(Transient)
+	TArray<USplineComponent*> RoadSplines;
 
+	UPROPERTY(Transient)
+	TArray<USplineMeshComponent*> RoadMeshes;
+
+	// Cached polylines describing the generated roads (world-space points).
+	UPROPERTY(Transient)
+	TArray<TArray<FVector>> CachedPolylines;
+
+	void RegisterRoadSpline(const TArray<FVector>& Polyline, const UWorldGenSettings* Settings);
+	TArray<FVector> MakeNaturalPath(const FVector& Start, const FVector& End, const FVector2f& RoomHalfSize, const UWorldGenSettings* Settings, FRandomStream& Rng, const TArray<FEnvironmentObstacle>& Obstacles) const;
+	FVector ClampToRoomBounds(const FVector& Point, const FVector2f& RoomHalfSize, const UWorldGenSettings* Settings) const;
+	FVector PushOutOfObstacles(const FVector& Point, const TArray<FEnvironmentObstacle>& Obstacles, float Clearance, FRandomStream& Rng) const;
+	static FVector ClosestPointOnSegment2D(const FVector& Point, const FVector& A, const FVector& B);
+	static float DistancePointToSegment2D(const FVector2D& Point, const FVector2D& A, const FVector2D& B);
 };
