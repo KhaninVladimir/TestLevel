@@ -293,11 +293,11 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
 					Openings.Add(E);
 			}
 
-                        const FVector SideOrigin = SideOriginWorld(Side);
-                        const FVector Along = SideDirectionWorld(Side);
+      const FVector SideOrigin = SideOriginWorld(Side);
+      сonst FVector Along = SideDirectionWorld(Side).GetSafeNormal();
 
-			// Rotation for all segments on this side is constant
-			const FQuat SegmentRot = Along.Rotation().Quaternion();
+       // Rotation for all segments on this side is constant
+       const FQuat SegmentRot = Along.Rotation().Quaternion();
 
 			// Fast path: no openings → add all segments
 			if (Openings.Num() == 0)
@@ -306,11 +306,11 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
 				{
 					const float CenterOff = -Span * 0.5f + (i + 0.5f) * Step;
 
-					FTransform T;
-					T.SetLocation(SideOrigin + Along * CenterOff);
-					T.SetRotation(SegmentRot);
-					T.SetScale3D(FVector(1, 1, 1));
-					WallISM->AddInstance(T);
+                                        FTransform T;
+                                        T.SetLocation(SideOrigin + Along * CenterOff);
+                                        T.SetRotation(SegmentRot);
+                                        T.SetScale3D(FVector(1, 1, 1));
+                                        WallISM->AddInstanceWorldSpace(T);
 				}
 				return;
 			}
@@ -331,11 +331,11 @@ void ALocationRoom::BuildWallsWithOpenings(const FDoorwaySpec& Entrance)
 				}
 				if (bCovered) continue;
 
-				FTransform T;
-				T.SetLocation(SideOrigin + Along * CenterOff);
-				T.SetRotation(SegmentRot);
-				T.SetScale3D(FVector(1, 1, 1));
-				WallISM->AddInstance(T);
+                                FTransform T;
+                                T.SetLocation(SideOrigin + Along * CenterOff);
+                                T.SetRotation(SegmentRot);
+                                T.SetScale3D(FVector(1, 1, 1));
+                                WallISM->AddInstanceWorldSpace(T);
 			}
 		};
 
