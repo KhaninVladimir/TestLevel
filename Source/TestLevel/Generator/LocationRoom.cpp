@@ -63,9 +63,9 @@ FVector ALocationRoom::SideOriginWorld(ERoomSide Side) const
 FVector ALocationRoom::SideDirection(ERoomSide Side) const
 {
         if (Side == ERoomSide::North || Side == ERoomSide::South)
-        {
+	{
                 return FVector(1, 0, 0); // along X
-        }
+	}
         return FVector(0, 1, 0); // along Y
 }
 
@@ -97,18 +97,18 @@ bool ALocationRoom::IsInsideRoom(const FVector& P) const
 bool ALocationRoom::SatisfiesMinDist(const FVector& P, const TArray<FVector>& Points, float MinDist) const
 {
         for (const FVector& Q : Points)
-        {
+	{
                 if (FVector::Dist2D(P, Q) < MinDist) return false;
-        }
+	}
         return true;
 }
 
 float ALocationRoom::DistanceToRoads(const FVector& P) const
 {
         if (RoadNetwork)
-        {
+	{
                 return RoadNetwork->DistanceToRoads(P);
-        }
+	}
 
 		return FLT_MAX;
 }
@@ -120,6 +120,8 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 	check(Settings && EntranceMarker);
 	GenSettings = Settings;
 	Rng = RndStream;
+	bHasFallbackRoadTarget = false;
+	FallbackRoadTarget = FVector::ZeroVector;
 
 	// Align room transform with the provided marker so that the actor's transform becomes
 	// the authoritative entry transform for the whole location (designers rotate the actor).
@@ -268,13 +270,49 @@ void ALocationRoom::Generate(const UWorldGenSettings* Settings, AWorldStartMarke
 	RoadPoint.Empty();
 	RoadPoint.Add(EntranceWorld);
 
-	for (const FDoorwaySpec& D : Exits)
+        for (const FDoorwaySpec& D : Exits)
 	{
-		RoadPoint.Add(D.WorldTransform.GetLocation());
+                RoadPoint.Add(D.WorldTransform.GetLocation());
 	}
 
-	// --- 8) POIs / Monsters ---
-	POIs.Empty();
+        if (ExitCount == 0)
+	{
+                const FVector2f H = GetHalfSize();
+                const float MinDist = FMath::Max(0.f, GenSettings->MinDistanceFromEntranceIfNoExits);
+                const int32 MaxTries = 48;
+                bool bFound = false;
+                FVector Candidate = EntranceWorld;
+                for (int32 TryIdx = 0; TryIdx < MaxTries; ++TryIdx)
+                {
+                        const FVector Local(
+                                Rng.FRandRange(-H.X * 0.8f, +H.X * 0.8f),
+                                Rng.FRandRange(-H.Y * 0.8f, +H.Y * 0.8f),
+                                0.f);
+                        const FVector World = RoomLocalToWorld(Local);
+                        if (!IsInsideRoom(World))
+                        {
+                                continue;
+                        }
+                        if (FVector::Dist2D(World, EntranceWorld) < MinDist)
+                        {
+                                continue;
+                        }
+                        Candidate = World;
+                        bFound = true;
+                        break;
+                }
+                if (!bFound)
+                {
+                        const FVector Local(0.f, FMath::Clamp(MinDist, 0.f, H.Y * 0.8f), 0.f);
+                        Candidate = RoomLocalToWorld(Local);
+                }
+                FallbackRoadTarget = Candidate;
+                bHasFallbackRoadTarget = true;
+                RoadPoint.Add(Candidate);
+	}
+
+        // --- 8) POIs / Monsters ---
+        POIs.Empty();
 	POIs.Reserve(GenSettings->POICountRange.Max); // верхняя граница — разумная эвристика
 	SpawnPOIs(EntranceLocation, POIs);
 
@@ -513,6 +551,10 @@ void ALocationRoom::SpawnEnvironment()
 	{
 		CorridorTargets.AddUnique(Exit.WorldTransform.GetLocation());
 	}
+	if (bHasFallbackRoadTarget)
+	{
+		CorridorTargets.AddUnique(FallbackRoadTarget);
+	}
 	for (AActor* POI : POIs)
 	{
 		if (POI)
@@ -670,7 +712,7 @@ void ALocationRoom::SpawnMonsters(TArray<AActor*>& OutMonsters)
 
         const int32 MaxPasses = 3;
         for (int32 pass = 0; pass < MaxPasses && Chosen.Num() < TotalNeed; ++pass)
-        {
+	{
                 for (int32 iy = 0; iy < CellsY && Chosen.Num() < TotalNeed; ++iy)
 		{
 			for (int32 ix = 0; ix < CellsX && Chosen.Num() < TotalNeed; ++ix)
@@ -691,14 +733,14 @@ void ALocationRoom::SpawnMonsters(TArray<AActor*>& OutMonsters)
                                 Chosen.Add(P);
                         }
                 }
-        }
+	}
 
 	// Fallback: relaxed sampling if constraints are tight
         const int32 TriesPer = 64;
         const int32 MaxTries = TriesPer * FMath::Max(1, TotalNeed);
         int32 Attempt = 0;
         while (Chosen.Num() < TotalNeed && Attempt < MaxTries)
-        {
+	{
                 ++Attempt;
                 const float Lx = Rng.FRandRange(-H.X + SafeMarginX, H.X - SafeMarginX);
                 const float Ly = Rng.FRandRange(-H.Y + SafeMarginY, H.Y - SafeMarginY);
@@ -709,7 +751,7 @@ void ALocationRoom::SpawnMonsters(TArray<AActor*>& OutMonsters)
                 if (MinRoadDistance > 0.f && DistanceToRoads(P) < MinRoadDistance) continue;
 
                 Chosen.Add(P);
-        }
+	}
 
 	if (Chosen.IsEmpty()) 
 		return;
@@ -738,25 +780,25 @@ void ALocationRoom::SpawnRoads()
 {
         UWorld* W = GetWorld();
         if (!W || !GenSettings)
-        {
+	{
                 RoadNetwork = nullptr;
                 return;
-        }
+	}
 
         if (RoadNetwork && !RoadNetwork->IsPendingKillPending())
-        {
+	{
                 RoadNetwork->Destroy();
-        }
+	}
         RoadNetwork = nullptr;
 
         if (GenSettings->RoadSplineMesh && RoadPoint.Num() > 1)
-        {
+	{
                 if (ARoadSegment* RoadNet = W->SpawnActor<ARoadSegment>(ARoadSegment::StaticClass(), GetActorTransform()))
                 {
                         RoadNetwork = RoadNet;
                         RoadNet->BuildNetwork(RoadPoint, Exits.Num(), GetHalfSize(), GenSettings, Rng, EnvironmentObstacles);
                 }
-        }
+	}
 }
 
 bool ALocationRoom::CanPlaceEnvironmentAt(const FVector& Candidate, const FEnvironmentSpawnEntry& Entry, const TArray<FVector>& CorridorTargets) const

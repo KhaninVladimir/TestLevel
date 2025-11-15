@@ -86,6 +86,12 @@ private:
 	FVector EntranceLocation = FVector::ZeroVector;
 
 	UPROPERTY(Transient)
+	FVector FallbackRoadTarget = FVector::ZeroVector;
+
+	UPROPERTY(Transient)
+	bool bHasFallbackRoadTarget = false;
+
+	UPROPERTY(Transient)
 	TArray<FEnvironmentObstacle> EnvironmentObstacles;
 
 	UPROPERTY(Transient)
